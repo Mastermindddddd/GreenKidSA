@@ -1,108 +1,80 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MongoClient, Db } from "mongodb";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
+import * as jwt from "jsonwebtoken";
+import * as bcrypt from "bcryptjs";
+import { connectDB } from "@/lib/mongodb";
 
-const MONGODB_URI = process.env.MONGODB_URI!;
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
 
-let client: MongoClient;
-let db: Db;
-
-async function connectDB() {
-  if (!client) {
-    client = new MongoClient(MONGODB_URI);
-    await client.connect();
-    db = client.db("greenkidsa");
-  }
-  return db;
+function makeToken(payload: object) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: "7d" });
 }
 
-// POST /api/auth  — body: { action: "signup"|"login", name?, email, password }
+function setCookie(res: NextResponse, token: string) {
+  res.cookies.set("auth-token", token, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    maxAge: 60 * 60 * 24 * 7,
+    path: "/",
+  });
+}
+
+// GET /api/auth — verify current session
+export async function GET(req: NextRequest) {
+  try {
+    const token = req.cookies.get("auth-token")?.value;
+    if (!token) return NextResponse.json({ user: null });
+
+    const payload = jwt.verify(token, JWT_SECRET) as {
+      userId: string; name: string; email: string; role: string;
+    };
+
+    return NextResponse.json({
+      user: { id: payload.userId, name: payload.name, email: payload.email, role: payload.role || "user" },
+    });
+  } catch {
+    return NextResponse.json({ user: null });
+  }
+}
+
+// POST /api/auth — login or signup
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { action, name, email, password } = body;
-
-    if (!email || !password) {
-      return NextResponse.json({ error: "Email and password are required" }, { status: 400 });
-    }
-
+    const { action, name, email, password } = await req.json();
     const database = await connectDB();
-    const users = database.collection("users");
-
-    if (action === "signup") {
-      if (!name) {
-        return NextResponse.json({ error: "Name is required" }, { status: 400 });
-      }
-
-      const existing = await users.findOne({ email: email.toLowerCase() });
-      if (existing) {
-        return NextResponse.json({ error: "An account with this email already exists" }, { status: 409 });
-      }
-
-      const hashedPassword = await bcrypt.hash(password, 12);
-      const result = await users.insertOne({
-        name,
-        email: email.toLowerCase(),
-        password: hashedPassword,
-        createdAt: new Date(),
-        balance: 0,
-      });
-
-      const token = jwt.sign(
-        { userId: result.insertedId.toString(), email: email.toLowerCase(), name },
-        JWT_SECRET,
-        { expiresIn: "7d" }
-      );
-
-      const response = NextResponse.json({
-        success: true,
-        user: { id: result.insertedId.toString(), name, email: email.toLowerCase() },
-      });
-
-      response.cookies.set("auth-token", token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 60 * 60 * 24 * 7, // 7 days
-        path: "/",
-      });
-
-      return response;
-    }
+    const users    = database.collection("users");
 
     if (action === "login") {
-      const user = await users.findOne({ email: email.toLowerCase() });
-      if (!user) {
-        return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
-      }
+      const user = await users.findOne({ email: email.toLowerCase().trim() });
+      if (!user) return NextResponse.json({ error: "No account found with that email" }, { status: 401 });
 
-      const passwordMatch = await bcrypt.compare(password, user.password);
-      if (!passwordMatch) {
-        return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
-      }
+      const match = await bcrypt.compare(password, user.passwordHash);
+      if (!match) return NextResponse.json({ error: "Incorrect password" }, { status: 401 });
 
-      const token = jwt.sign(
-        { userId: user._id.toString(), email: user.email, name: user.name },
-        JWT_SECRET,
-        { expiresIn: "7d" }
-      );
+      const token = makeToken({ userId: user._id.toString(), name: user.name, email: user.email, role: user.role || "user" });
+      const res   = NextResponse.json({ user: { id: user._id.toString(), name: user.name, email: user.email, role: user.role || "user" } });
+      setCookie(res, token);
+      return res;
+    }
 
-      const response = NextResponse.json({
-        success: true,
-        user: { id: user._id.toString(), name: user.name, email: user.email },
+    if (action === "signup") {
+      if (!name || !email || !password)
+        return NextResponse.json({ error: "Name, email and password are required" }, { status: 400 });
+
+      const existing = await users.findOne({ email: email.toLowerCase().trim() });
+      if (existing) return NextResponse.json({ error: "An account with this email already exists" }, { status: 409 });
+
+      const passwordHash = await bcrypt.hash(password, 12);
+      const result = await users.insertOne({
+        name: name.trim(), email: email.toLowerCase().trim(), passwordHash,
+        role: "user", totalPoints: 0, totalJobsCompleted: 0, totalKgCollected: 0,
+        createdAt: new Date(), updatedAt: new Date(),
       });
 
-      response.cookies.set("auth-token", token, {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: "lax",
-        maxAge: 60 * 60 * 24 * 7,
-        path: "/",
-      });
-
-      return response;
+      const token = makeToken({ userId: result.insertedId.toString(), name: name.trim(), email: email.toLowerCase().trim(), role: "user" });
+      const res   = NextResponse.json({ user: { id: result.insertedId.toString(), name: name.trim(), email: email.toLowerCase().trim(), role: "user" } });
+      setCookie(res, token);
+      return res;
     }
 
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
@@ -114,22 +86,7 @@ export async function POST(req: NextRequest) {
 
 // DELETE /api/auth — logout
 export async function DELETE() {
-  const response = NextResponse.json({ success: true });
-  response.cookies.set("auth-token", "", { maxAge: 0, path: "/" });
-  return response;
-}
-
-// GET /api/auth — get current user from cookie
-export async function GET(req: NextRequest) {
-  try {
-    const token = req.cookies.get("auth-token")?.value;
-    if (!token) return NextResponse.json({ user: null });
-
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
-    return NextResponse.json({
-      user: { id: decoded.userId, name: decoded.name, email: decoded.email },
-    });
-  } catch {
-    return NextResponse.json({ user: null });
-  }
+  const res = NextResponse.json({ success: true });
+  res.cookies.set("auth-token", "", { maxAge: 0, path: "/" });
+  return res;
 }

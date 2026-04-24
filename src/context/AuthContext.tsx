@@ -1,10 +1,12 @@
 "use client";
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
 
-interface User {
+export interface User {
   id: string;
   name: string;
   email: string;
+  // "user" | "driver" | "dispatcher" | "admin"
+  role: string;
 }
 
 interface AuthContextType {
@@ -25,7 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetch("/api/auth")
       .then((r) => r.json())
       .then((data) => {
-        setUser(data.user);
+        setUser(data.user ?? null);
         setLoading(false);
       })
       .catch(() => setLoading(false));

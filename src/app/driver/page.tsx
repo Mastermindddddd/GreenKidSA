@@ -1,0 +1,865 @@
+// @ts-nocheck
+"use client";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useAuth } from "@/context/AuthContext";
+import { useRouter } from "next/navigation";
+import {
+  MapPin, Clock, Weight, ChevronRight, CheckCircle2,
+  Camera, AlertTriangle, Phone, Navigation, Package,
+  Recycle, Leaf, Zap, X, Check, RotateCcw, Star,
+  TrendingUp, Trophy, ArrowRight, Loader2, Upload,
+} from "lucide-react";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+interface Job {
+  _id: string;
+  address: string;
+  location: string;
+  wasteType: "general" | "organic" | "recycling" | "hazardous";
+  amount: string;
+  urgency: "low" | "normal" | "high";
+  preferredDate: string;
+  preferredTime: string;
+  contactPhone: string;
+  description: string;
+  status: "assigned" | "en_route" | "arrived" | "collecting" | "completed";
+  userName: string;
+  distanceKm?: number;
+  etaMin?: number;
+}
+
+interface DaySummary {
+  completed: number;
+  total: number;
+  kgCollected: number;
+  points: number;
+  onTimeRate: number;
+}
+
+// ─── Constants ─────────────────────────────────────────────────────────────────
+const WASTE_META: Record<string, { label: string; color: string; bg: string; Icon: any }> = {
+  general:    { label: "General",    color: "#374151", bg: "#F3F4F6", Icon: Package },
+  organic:    { label: "Organic",    color: "#166534", bg: "#DCFCE7", Icon: Leaf },
+  recycling:  { label: "Recycling",  color: "#1D4ED8", bg: "#DBEAFE", Icon: Recycle },
+  hazardous:  { label: "Hazardous",  color: "#9A3412", bg: "#FEE2E2", Icon: Zap },
+};
+
+const URGENCY_DOT: Record<string, string> = {
+  high: "#EF4444",
+  normal: "#F59E0B",
+  low: "#22C55E",
+};
+
+const CHECKLIST_ITEMS = [
+  "Verify address matches job card",
+  "PPE gear fitted correctly",
+  "Check waste type labels on bins",
+  "Confirm bin / access point available",
+  "Truck positioned safely",
+];
+
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+function fmtTimer(s: number) {
+  const m = Math.floor(s / 60).toString().padStart(2, "0");
+  const sec = (s % 60).toString().padStart(2, "0");
+  return `${m}:${sec}`;
+}
+
+function WasteTypeBadge({ type }: { type: string }) {
+  const m = WASTE_META[type] ?? WASTE_META.general;
+  const { Icon } = m;
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold"
+      style={{ color: m.color, backgroundColor: m.bg }}
+    >
+      <Icon className="w-3 h-3" />
+      {m.label}
+    </span>
+  );
+}
+
+// ─── Sub-components ────────────────────────────────────────────────────────────
+function TabBar({ tab, setTab }: { tab: string; setTab: (t: string) => void }) {
+  const tabs = [
+    { id: "jobs", label: "Jobs" },
+    { id: "trip", label: "Active Trip" },
+    { id: "proof", label: "Proof" },
+    { id: "day", label: "My Day" },
+  ];
+  return (
+    <div className="flex border-b border-gray-100 bg-white sticky top-0 z-10">
+      {tabs.map((t) => (
+        <button
+          key={t.id}
+          onClick={() => setTab(t.id)}
+          className={`flex-1 py-3 text-xs font-semibold tracking-wide transition-all ${
+            tab === t.id
+              ? "text-green-700 border-b-2 border-green-600 bg-green-50"
+              : "text-gray-400 hover:text-gray-600"
+          }`}
+        >
+          {t.label.toUpperCase()}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ─── PANEL: Jobs ──────────────────────────────────────────────────────────────
+function JobsPanel({
+  jobs,
+  loading,
+  activeJobId,
+  onStart,
+}: {
+  jobs: Job[];
+  loading: boolean;
+  activeJobId: string | null;
+  onStart: (job: Job) => void;
+}) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-48 text-gray-400">
+        <Loader2 className="w-6 h-6 animate-spin mr-2" />
+        Loading jobs…
+      </div>
+    );
+  }
+
+  if (!jobs.length) {
+    return (
+      <div className="flex flex-col items-center justify-center h-48 text-gray-400 gap-2">
+        <CheckCircle2 className="w-10 h-10 text-green-300" />
+        <p className="font-medium">All done for today!</p>
+        <p className="text-sm">No more jobs in the queue.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 space-y-3">
+      <p className="text-xs font-bold tracking-widest text-gray-400 uppercase mb-1">
+        Today's Queue — {jobs.length} job{jobs.length !== 1 ? "s" : ""}
+      </p>
+
+      {jobs.map((job) => {
+        const isExpanded = expanded === job._id;
+        const isActive = activeJobId === job._id;
+        const isOtherActive = activeJobId && activeJobId !== job._id;
+
+        return (
+          <div
+            key={job._id}
+            onClick={() => !isOtherActive && setExpanded(isExpanded ? null : job._id)}
+            className={`rounded-2xl border transition-all overflow-hidden ${
+              isActive
+                ? "border-green-500 border-2 bg-green-50"
+                : isOtherActive
+                ? "border-gray-100 opacity-50 cursor-not-allowed"
+                : "border-gray-200 bg-white hover:border-green-300 cursor-pointer"
+            }`}
+          >
+            {/* Card header */}
+            <div className="flex items-center gap-3 p-4">
+              <div
+                className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                style={{ backgroundColor: URGENCY_DOT[job.urgency] }}
+              />
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 text-sm truncate">{job.address}</p>
+                <p className="text-xs text-gray-500">{job.location}</p>
+              </div>
+              <WasteTypeBadge type={job.wasteType} />
+              {!isOtherActive && (
+                <ChevronRight
+                  className={`w-4 h-4 text-gray-400 flex-shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`}
+                />
+              )}
+            </div>
+
+            {/* Meta row */}
+            <div className="flex gap-4 px-4 pb-3">
+              <span className="flex items-center gap-1 text-xs text-gray-500">
+                <Clock className="w-3 h-3" />
+                {job.preferredTime || "Flexible"}
+              </span>
+              <span className="flex items-center gap-1 text-xs text-gray-500">
+                <Weight className="w-3 h-3" />
+                {job.amount}
+              </span>
+              {job.distanceKm != null && (
+                <span className="flex items-center gap-1 text-xs text-gray-500">
+                  <MapPin className="w-3 h-3" />
+                  {job.distanceKm.toFixed(1)} km
+                </span>
+              )}
+            </div>
+
+            {/* Expanded actions */}
+            {isExpanded && (
+              <div className="border-t border-gray-100 px-4 py-3 bg-gray-50 space-y-2">
+                {job.description && (
+                  <p className="text-xs text-gray-600 mb-2">{job.description}</p>
+                )}
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStart(job);
+                    }}
+                    disabled={!!activeJobId}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-xs font-semibold transition-colors"
+                  >
+                    <Navigation className="w-3.5 h-3.5" />
+                    Start Trip
+                  </button>
+                  {job.contactPhone && (
+                    <a
+                      href={`tel:${job.contactPhone}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-300 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-100 transition-colors"
+                    >
+                      <Phone className="w-3.5 h-3.5" />
+                      Call
+                    </a>
+                  )}
+                  <a
+                    href={`https://maps.google.com/?q=${encodeURIComponent(job.address)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-gray-300 bg-white text-xs font-semibold text-gray-700 hover:bg-gray-100 transition-colors"
+                  >
+                    <MapPin className="w-3.5 h-3.5" />
+                    Maps
+                  </a>
+                </div>
+              </div>
+            )}
+
+            {/* Status bar for active job */}
+            {isActive && (
+              <div className="bg-green-600 text-white text-xs font-bold text-center py-1.5 tracking-wide">
+                ● ACTIVE — IN PROGRESS
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── PANEL: Active Trip ────────────────────────────────────────────────────────
+function TripPanel({
+  job,
+  elapsed,
+  checks,
+  onToggleCheck,
+  onArrived,
+  onReportIssue,
+}: {
+  job: Job | null;
+  elapsed: number;
+  checks: boolean[];
+  onToggleCheck: (i: number) => void;
+  onArrived: () => void;
+  onReportIssue: () => void;
+}) {
+  if (!job) {
+    return (
+      <div className="flex flex-col items-center justify-center h-48 text-gray-400 gap-2 p-8 text-center">
+        <Navigation className="w-10 h-10 text-gray-300" />
+        <p className="font-medium">No active trip</p>
+        <p className="text-sm">Select a job and tap "Start Trip" to begin.</p>
+      </div>
+    );
+  }
+
+  const checkedCount = checks.filter(Boolean).length;
+  const canArrive = checkedCount >= 3;
+
+  return (
+    <div className="p-4 space-y-4">
+      {/* Banner */}
+      <div className="rounded-2xl bg-green-900 text-white p-5">
+        <p className="text-xs font-bold tracking-widest opacity-60 mb-1">ACTIVE JOB</p>
+        <p className="font-bold text-lg leading-tight mb-4">{job.address}</p>
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: "ETA", value: job.etaMin != null ? `${job.etaMin} min` : "—" },
+            { label: "Distance", value: job.distanceKm != null ? `${job.distanceKm.toFixed(1)} km` : "—" },
+            { label: "Elapsed", value: fmtTimer(elapsed) },
+          ].map(({ label, value }) => (
+            <div key={label}>
+              <p className="font-mono text-lg font-bold">{value}</p>
+              <p className="text-xs opacity-60">{label}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Map link */}
+      <a
+        href={`https://maps.google.com/?q=${encodeURIComponent(job.address)}`}
+        target="_blank"
+        rel="noreferrer"
+        className="flex items-center justify-between w-full px-4 py-3 rounded-xl border border-gray-200 bg-white hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+          <Navigation className="w-4 h-4 text-green-600" />
+          Open in Google Maps
+        </div>
+        <ArrowRight className="w-4 h-4 text-gray-400" />
+      </a>
+
+      {/* Checklist */}
+      <div>
+        <p className="text-xs font-bold tracking-widest text-gray-400 uppercase mb-2">
+          Pre-Arrival Checklist ({checkedCount}/{CHECKLIST_ITEMS.length})
+        </p>
+        <ul className="space-y-2">
+          {CHECKLIST_ITEMS.map((item, i) => (
+            <li
+              key={i}
+              onClick={() => onToggleCheck(i)}
+              className={`flex items-center gap-3 px-4 py-3 rounded-xl border cursor-pointer select-none transition-all ${
+                checks[i]
+                  ? "border-green-300 bg-green-50 text-green-800"
+                  : "border-gray-200 bg-white text-gray-700 hover:border-gray-300"
+              }`}
+            >
+              <div
+                className={`w-5 h-5 rounded-md border-2 flex items-center justify-center flex-shrink-0 transition-colors ${
+                  checks[i] ? "bg-green-600 border-green-600" : "border-gray-300"
+                }`}
+              >
+                {checks[i] && <Check className="w-3 h-3 text-white" />}
+              </div>
+              <span className="text-sm">{item}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      {/* Actions */}
+      <button
+        onClick={onArrived}
+        disabled={!canArrive}
+        className="w-full py-3.5 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-200 disabled:text-gray-400 text-white"
+      >
+        <CheckCircle2 className="w-4 h-4" />
+        {canArrive ? "Mark Arrived & Start Collection" : `Complete ${3 - checkedCount} more item${3 - checkedCount !== 1 ? "s" : ""} to continue`}
+      </button>
+
+      <button
+        onClick={onReportIssue}
+        className="w-full py-3 rounded-xl font-semibold text-sm border border-red-200 bg-red-50 text-red-600 hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+      >
+        <AlertTriangle className="w-4 h-4" />
+        Report Issue
+      </button>
+    </div>
+  );
+}
+
+// ─── PANEL: Proof ─────────────────────────────────────────────────────────────
+function ProofPanel({
+  job,
+  onComplete,
+}: {
+  job: Job | null;
+  onComplete: (data: { weight: number; notes: string; imageUrls: string[] }) => void;
+}) {
+  const [weight, setWeight] = useState("");
+  const [notes, setNotes] = useState("");
+  const [photos, setPhotos] = useState<{ file: File; preview: string; url?: string }[]>([]);
+  const [sigCaptured, setSigCaptured] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const uploadToS3 = async (file: File): Promise<string> => {
+    const res = await fetch("/api/upload-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fileName: file.name, fileType: file.type }),
+    });
+    const { uploadUrl, publicUrl } = await res.json();
+    await fetch(uploadUrl, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
+    return publicUrl;
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (photos.length + files.length > 5) {
+      alert("Maximum 5 photos allowed");
+      return;
+    }
+    setUploading(true);
+    for (const file of files) {
+      const preview = URL.createObjectURL(file);
+      setPhotos((prev) => [...prev, { file, preview }]);
+      try {
+        const url = await uploadToS3(file);
+        setPhotos((prev) =>
+          prev.map((p) => (p.preview === preview ? { ...p, url } : p))
+        );
+      } catch {
+        console.error("Upload failed for", file.name);
+      }
+    }
+    setUploading(false);
+    e.target.value = "";
+  };
+
+  const removePhoto = (preview: string) => {
+    setPhotos((prev) => prev.filter((p) => p.preview !== preview));
+  };
+
+  const handleSubmit = async () => {
+    if (!weight || parseFloat(weight) <= 0) {
+      alert("Please enter the weight collected.");
+      return;
+    }
+    if (photos.length < 1) {
+      alert("Please capture at least one photo as proof.");
+      return;
+    }
+    const imageUrls = photos.map((p) => p.url).filter(Boolean) as string[];
+    setSubmitting(true);
+    await onComplete({ weight: parseFloat(weight), notes, imageUrls });
+    setSubmitting(false);
+  };
+
+  if (!job) {
+    return (
+      <div className="flex flex-col items-center justify-center h-48 text-gray-400 gap-2 p-8 text-center">
+        <Camera className="w-10 h-10 text-gray-300" />
+        <p className="font-medium">No active job</p>
+        <p className="text-sm">Start a trip to unlock proof capture.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="bg-green-50 border border-green-200 rounded-xl px-4 py-2.5">
+        <p className="text-xs font-bold tracking-widest text-green-600 uppercase">Proving collection at</p>
+        <p className="font-semibold text-green-900 text-sm">{job.address}</p>
+      </div>
+
+      {/* Photos */}
+      <div>
+        <p className="text-xs font-bold tracking-widest text-gray-400 uppercase mb-2">
+          Photos ({photos.length}/5) — Before &amp; After Required
+        </p>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="image/*"
+          multiple
+          capture="environment"
+          onChange={handleFileChange}
+          className="hidden"
+        />
+
+        {photos.length < 5 && (
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={uploading}
+            className="w-full border-2 border-dashed border-gray-300 hover:border-green-400 rounded-2xl py-6 flex flex-col items-center gap-2 text-gray-500 hover:text-green-600 transition-colors mb-3 disabled:opacity-50"
+          >
+            {uploading ? (
+              <Loader2 className="w-7 h-7 animate-spin" />
+            ) : (
+              <Camera className="w-7 h-7" />
+            )}
+            <span className="text-sm font-semibold">{uploading ? "Uploading…" : "Tap to capture photo"}</span>
+            <span className="text-xs opacity-60">JPG, PNG up to 10MB each</span>
+          </button>
+        )}
+
+        {photos.length > 0 && (
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            {photos.map((p) => (
+              <div key={p.preview} className="relative aspect-square rounded-xl overflow-hidden border border-gray-200 bg-gray-100">
+                <img src={p.preview} alt="proof" className="w-full h-full object-cover" />
+                {!p.url && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+                    <Loader2 className="w-5 h-5 text-white animate-spin" />
+                  </div>
+                )}
+                {p.url && (
+                  <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-green-500 flex items-center justify-center">
+                    <Check className="w-3 h-3 text-white" />
+                  </div>
+                )}
+                <button
+                  onClick={() => removePhoto(p.preview)}
+                  className="absolute bottom-1.5 right-1.5 w-5 h-5 rounded-full bg-red-500 flex items-center justify-center"
+                >
+                  <X className="w-3 h-3 text-white" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Weight */}
+      <div>
+        <p className="text-xs font-bold tracking-widest text-gray-400 uppercase mb-2">Weight Collected</p>
+        <div className="flex items-center gap-3 bg-gray-50 border border-gray-200 rounded-xl px-4 py-3">
+          <Weight className="w-5 h-5 text-green-600 flex-shrink-0" />
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            value={weight}
+            onChange={(e) => setWeight(e.target.value)}
+            placeholder="0.0"
+            className="flex-1 bg-transparent text-2xl font-bold text-gray-900 outline-none placeholder-gray-300 w-24"
+          />
+          <span className="text-gray-500 font-semibold">kg</span>
+        </div>
+      </div>
+
+      {/* Notes */}
+      <div>
+        <p className="text-xs font-bold tracking-widest text-gray-400 uppercase mb-2">Notes for Dispatcher</p>
+        <textarea
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Any issues, access problems, or extra info…"
+          rows={3}
+          className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-800 bg-gray-50 outline-none focus:ring-2 focus:ring-green-400 resize-none placeholder-gray-400"
+        />
+      </div>
+
+      {/* Signature */}
+      <div>
+        <p className="text-xs font-bold tracking-widest text-gray-400 uppercase mb-2">Resident Signature</p>
+        {!sigCaptured ? (
+          <button
+            onClick={() => setSigCaptured(true)}
+            className="w-full border border-dashed border-gray-300 rounded-xl py-4 text-sm text-gray-500 hover:border-green-400 hover:text-green-600 transition-colors flex items-center justify-center gap-2"
+          >
+            ✍ Tap to capture resident signature
+          </button>
+        ) : (
+          <div className="flex items-center gap-2 border border-green-300 bg-green-50 rounded-xl px-4 py-3">
+            <CheckCircle2 className="w-4 h-4 text-green-600" />
+            <span className="text-sm font-semibold text-green-800">Signature captured</span>
+            <button onClick={() => setSigCaptured(false)} className="ml-auto">
+              <RotateCcw className="w-3.5 h-3.5 text-green-600" />
+            </button>
+          </div>
+        )}
+      </div>
+
+      <button
+        onClick={handleSubmit}
+        disabled={submitting || uploading}
+        className="w-full py-4 rounded-xl font-bold text-sm bg-green-600 hover:bg-green-700 disabled:bg-gray-200 disabled:text-gray-400 text-white transition-colors flex items-center justify-center gap-2"
+      >
+        {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+        {submitting ? "Submitting…" : "Submit & Complete Job"}
+      </button>
+    </div>
+  );
+}
+
+// ─── PANEL: My Day ────────────────────────────────────────────────────────────
+function DayPanel({ summary, jobs }: { summary: DaySummary; jobs: Job[] }) {
+  const stats = [
+    { label: "Jobs Done", value: `${summary.completed}/${summary.total}`, Icon: CheckCircle2, color: "text-green-600" },
+    { label: "Kg Collected", value: `${summary.kgCollected.toFixed(1)}`, Icon: Weight, color: "text-blue-600" },
+    { label: "Points Earned", value: `${summary.points}`, Icon: Star, color: "text-amber-500" },
+    { label: "On-Time Rate", value: `${summary.onTimeRate}%`, Icon: TrendingUp, color: "text-purple-600" },
+  ];
+
+  return (
+    <div className="p-4 space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        {stats.map(({ label, value, Icon, color }) => (
+          <div key={label} className="bg-white border border-gray-100 rounded-2xl p-4">
+            <Icon className={`w-5 h-5 ${color} mb-2`} />
+            <p className="text-2xl font-bold text-gray-900 font-mono">{value}</p>
+            <p className="text-xs text-gray-500 mt-0.5">{label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Leaderboard hint */}
+      <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-center gap-3">
+        <Trophy className="w-5 h-5 text-amber-500 flex-shrink-0" />
+        <div>
+          <p className="text-sm font-bold text-amber-900">You're in the top 10%</p>
+          <p className="text-xs text-amber-700">Keep it up to claim your weekly bonus!</p>
+        </div>
+      </div>
+
+      {/* Route progress */}
+      <div>
+        <p className="text-xs font-bold tracking-widest text-gray-400 uppercase mb-3">Route Progress</p>
+        <div className="space-y-0">
+          {[
+            { label: "Depot — Start of shift", time: "06:45", done: true },
+            ...jobs.map((j) => ({
+              label: j.address,
+              time: j.preferredTime || "—",
+              done: j.status === "completed",
+              active: j.status !== "completed" && j.status !== "assigned",
+            })),
+            { label: "Depot — End of shift", time: "Est. 16:00", done: false },
+          ].map((item, i, arr) => (
+            <div key={i} className="flex gap-3">
+              <div className="flex flex-col items-center">
+                <div
+                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 mt-0.5 z-10 ${
+                    item.done
+                      ? "bg-green-600 border-green-600"
+                      : (item as any).active
+                      ? "bg-amber-400 border-amber-500"
+                      : "bg-white border-gray-300"
+                  }`}
+                >
+                  {item.done && <Check className="w-3 h-3 text-white" />}
+                </div>
+                {i < arr.length - 1 && (
+                  <div className={`w-0.5 h-8 mt-1 ${item.done ? "bg-green-300" : "bg-gray-200"}`} />
+                )}
+              </div>
+              <div className="pb-6">
+                <p className={`text-sm font-semibold ${item.done ? "text-green-800" : "text-gray-700"}`}>
+                  {item.label}
+                </p>
+                <p className="text-xs text-gray-400">{item.time}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Completion overlay ────────────────────────────────────────────────────────
+function CompletionOverlay({ onDone }: { onDone: () => void }) {
+  return (
+    <div className="absolute inset-0 z-50 bg-green-800 flex flex-col items-center justify-center gap-4 text-white text-center px-8 rounded-2xl">
+      <div className="text-6xl">🎉</div>
+      <h2 className="text-2xl font-bold">Job Complete!</h2>
+      <p className="text-green-200 text-sm max-w-xs">
+        Proof submitted and dispatcher notified. Points added to your total.
+      </p>
+      <button
+        onClick={onDone}
+        className="mt-4 px-8 py-3 rounded-xl bg-white/20 hover:bg-white/30 border border-white/30 font-semibold transition-colors"
+      >
+        Back to Jobs
+      </button>
+    </div>
+  );
+}
+
+// ─── MAIN PAGE ────────────────────────────────────────────────────────────────
+export default function DriverPage() {
+  const { user, loading: authLoading } = useAuth();
+  const router = useRouter();
+
+  const [tab, setTab] = useState("jobs");
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobsLoading, setJobsLoading] = useState(true);
+  const [activeJob, setActiveJob] = useState<Job | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [checks, setChecks] = useState<boolean[]>(CHECKLIST_ITEMS.map(() => false));
+  const [showComplete, setShowComplete] = useState(false);
+  const [summary, setSummary] = useState<DaySummary>({
+    completed: 0,
+    total: 0,
+    kgCollected: 0,
+    points: 0,
+    onTimeRate: 94,
+  });
+
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Auth guard
+  useEffect(() => {
+    if (!authLoading && !user) router.push("/");
+  }, [user, authLoading, router]);
+
+  // Fetch driver jobs
+  useEffect(() => {
+    if (!user) return;
+    const load = async () => {
+      setJobsLoading(true);
+      try {
+        const res = await fetch("/api/driver/jobs");
+        if (res.ok) {
+          const data = await res.json();
+          setJobs(data.jobs || []);
+          setSummary((s) => ({ ...s, total: (data.jobs || []).length }));
+        }
+      } catch (e) {
+        console.error("Failed to load jobs", e);
+      } finally {
+        setJobsLoading(false);
+      }
+    };
+    load();
+  }, [user]);
+
+  // Trip timer
+  const startTimer = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setElapsed(0);
+    timerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
+  }, []);
+
+  const stopTimer = useCallback(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+  }, []);
+
+  const handleStartTrip = (job: Job) => {
+    setActiveJob(job);
+    setChecks(CHECKLIST_ITEMS.map(() => false));
+    startTimer();
+    // Update status on server
+    fetch(`/api/driver/jobs/${job._id}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "en_route" }),
+    }).catch(console.error);
+    setTab("trip");
+  };
+
+  const handleArrived = () => {
+    if (!activeJob) return;
+    fetch(`/api/driver/jobs/${activeJob._id}/status`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "collecting" }),
+    }).catch(console.error);
+    setTab("proof");
+  };
+
+  const handleComplete = async (data: { weight: number; notes: string; imageUrls: string[] }) => {
+    if (!activeJob) return;
+    await fetch(`/api/driver/jobs/${activeJob._id}/complete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    stopTimer();
+    setShowComplete(true);
+  };
+
+  const handleDone = () => {
+    setShowComplete(false);
+    setJobs((prev) => prev.filter((j) => j._id !== activeJob?._id));
+    setSummary((s) => ({
+      ...s,
+      completed: s.completed + 1,
+      kgCollected: s.kgCollected + 0, // will be updated from server on next load
+      points: s.points + 10,
+    }));
+    setActiveJob(null);
+    stopTimer();
+    setTab("jobs");
+  };
+
+  const handleReportIssue = async () => {
+    if (!activeJob) return;
+    const issue = prompt("Briefly describe the issue:");
+    if (!issue) return;
+    await fetch(`/api/driver/jobs/${activeJob._id}/issue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ issue }),
+    });
+    alert("Issue reported to dispatcher.");
+  };
+
+  if (authLoading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="w-8 h-8 animate-spin text-green-600" />
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  // Initials for avatar
+  const parts = user.name.trim().split(/\s+/);
+  const initials =
+    parts.length >= 2
+      ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+      : parts[0].slice(0, 2).toUpperCase();
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex justify-center py-4 px-2">
+      <div className="w-full max-w-md relative">
+        <div className="rounded-2xl overflow-hidden shadow-xl border border-gray-200 bg-white relative">
+
+          {showComplete && <CompletionOverlay onDone={handleDone} />}
+
+          {/* Header */}
+          <div className="bg-green-900 px-5 py-4 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-green-400 text-green-900 flex items-center justify-center font-bold text-sm flex-shrink-0">
+                {initials}
+              </div>
+              <div>
+                <p className="text-white font-semibold text-sm">{user.name}</p>
+                <p className="text-green-300 text-xs">Driver · On Shift</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-green-400 text-xs font-mono font-bold">
+                {new Date().toLocaleTimeString("en-ZA", { hour: "2-digit", minute: "2-digit" })}
+              </p>
+              <p className="text-green-500 text-xs">{activeJob ? "● ACTIVE JOB" : "● READY"}</p>
+            </div>
+          </div>
+
+          <TabBar tab={tab} setTab={setTab} />
+
+          {/* Panels */}
+          <div className="max-h-[72vh] overflow-y-auto">
+            {tab === "jobs" && (
+              <JobsPanel
+                jobs={jobs}
+                loading={jobsLoading}
+                activeJobId={activeJob?._id ?? null}
+                onStart={handleStartTrip}
+              />
+            )}
+            {tab === "trip" && (
+              <TripPanel
+                job={activeJob}
+                elapsed={elapsed}
+                checks={checks}
+                onToggleCheck={(i) => setChecks((prev) => prev.map((v, idx) => (idx === i ? !v : v)))}
+                onArrived={handleArrived}
+                onReportIssue={handleReportIssue}
+              />
+            )}
+            {tab === "proof" && (
+              <ProofPanel job={activeJob} onComplete={handleComplete} />
+            )}
+            {tab === "day" && (
+              <DayPanel summary={summary} jobs={jobs} />
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
