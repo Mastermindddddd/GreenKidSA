@@ -188,13 +188,13 @@ export default function RequestCollectionPage() {
             >
               New Request
             </button>
-            <button
+            {/*<button
               onClick={() => router.push('/collect')}
               className="flex-1 py-3 rounded-xl text-white font-semibold text-sm transition flex items-center justify-center gap-2"
               style={{ background: 'linear-gradient(135deg, #16a34a, #15803d)' }}
             >
               View Tasks <ArrowRight className="h-4 w-4" />
-            </button>
+            </button>*/}
           </div>
         </div>
       </div>
