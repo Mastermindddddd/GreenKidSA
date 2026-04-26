@@ -1,27 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MongoClient, Db } from "mongodb";
+import { connectDB } from "@/lib/mongodb";
 import * as jwt from "jsonwebtoken";
-
-const MONGODB_URI = process.env.MONGODB_URI!;
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
-
-let client: MongoClient;
-let db: Db;
-
-async function connectDB() {
-  if (!client) {
-    client = new MongoClient(MONGODB_URI);
-    await client.connect();
-    db = client.db("greenkidsa");
-  }
-  return db;
-}
 
 function isAdmin(req: NextRequest) {
   try {
     const token = req.cookies.get("auth-token")?.value;
     if (!token) return false;
-    const payload = jwt.verify(token, JWT_SECRET) as { role?: string };
+    const payload = jwt.verify(token, process.env.JWT_SECRET as string) as { role?: string };
     return payload.role === "admin" || payload.role === "dispatcher";
   } catch {
     return false;

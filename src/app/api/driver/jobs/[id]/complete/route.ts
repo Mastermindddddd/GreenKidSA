@@ -1,27 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MongoClient, Db, ObjectId } from "mongodb";
+import { connectDB } from "@/lib/mongodb";
+import { ObjectId } from "mongodb";
 import * as jwt from "jsonwebtoken";
-
-const MONGODB_URI = process.env.MONGODB_URI!;
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
-
-let client: MongoClient;
-let db: Db;
-
-async function connectDB() {
-  if (!client) {
-    client = new MongoClient(MONGODB_URI);
-    await client.connect();
-    db = client.db("greenkidsa");
-  }
-  return db;
-}
 
 function getUserFromToken(req: NextRequest) {
   try {
     const token = req.cookies.get("auth-token")?.value;
     if (!token) return null;
-    return jwt.verify(token, JWT_SECRET) as {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) return null;
+    const decoded = jwt.verify(token, secret) as unknown;
+    return decoded as {
       userId: string;
       name: string;
       email: string;

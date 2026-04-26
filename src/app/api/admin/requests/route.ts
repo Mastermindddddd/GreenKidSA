@@ -1,21 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MongoClient, Db } from "mongodb";
+import { connectDB } from "@/lib/mongodb";
 import * as jwt from "jsonwebtoken";
 
-const MONGODB_URI = process.env.MONGODB_URI!;
-const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
-
-let client: MongoClient;
-let db: Db;
-
-async function connectDB() {
-  if (!client) {
-    client = new MongoClient(MONGODB_URI);
-    await client.connect();
-    db = client.db("greenkidsa");
-  }
-  return db;
-}
+const JWT_SECRET = process.env.JWT_SECRET as string;
 
 function isAdmin(req: NextRequest) {
   try {

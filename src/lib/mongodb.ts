@@ -37,9 +37,10 @@ export async function connectDB(): Promise<Db> {
   if (db) return db;
 
   const newClient = new MongoClient(MONGODB_URI, {
-    // Fail quickly in development so you see errors fast instead of waiting 30s
-    serverSelectionTimeoutMS: process.env.NODE_ENV === "production" ? 30_000 : 10_000,
-    connectTimeoutMS:         process.env.NODE_ENV === "production" ? 30_000 : 10_000,
+    // Increase timeouts to handle network issues
+    serverSelectionTimeoutMS: 30000,
+    connectTimeoutMS: 30000,
+    socketTimeoutMS: 30000,
   });
 
   try {
