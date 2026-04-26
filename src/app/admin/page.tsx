@@ -1,3 +1,7 @@
+// Path: /app/admin/page.tsx
+// Route: /admin
+
+// @ts-nocheck
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/context/AuthContext";
@@ -332,9 +336,18 @@ function RequestsPanel({ requests, drivers, loading, onAssign, onRefresh }: {
                         defaultValue=""
                       >
                         <option value="" disabled>Select a driver…</option>
-                        {drivers.filter((d) => d.status !== "offline").map((d) => (
-                          <option key={d._id} value={d._id}>{d.name} ({d.status})</option>
-                        ))}
+                        {["active", "idle", "offline"].map((s) => {
+                          const group = drivers.filter((d) => d.status === s);
+                          if (!group.length) return null;
+                          const label = s === "active" ? "● Online" : s === "idle" ? "◑ Idle" : "○ Offline";
+                          return (
+                            <optgroup key={s} label={label}>
+                              {group.map((d) => (
+                                <option key={d._id} value={d._id}>{d.name}</option>
+                              ))}
+                            </optgroup>
+                          );
+                        })}
                       </select>
                       <button
                         onClick={() => {

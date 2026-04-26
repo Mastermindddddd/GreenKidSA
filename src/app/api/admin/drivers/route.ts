@@ -1,21 +1,30 @@
+// Path: /app/api/admin/drivers/route.ts
+// Endpoint: GET /api/admin/drivers
+//
+// DRIVER PRESENCE LOGIC
+// ─────────────────────
+// A driver's status is derived from lastActiveAt, which is written in three places:
+//
+//   1. POST /api/auth (login)         → set to now
+//   2. GET  /api/auth (session check) → set to now (AuthContext calls this on load)
+//   3. GET  /api/driver/jobs          → set to now (useDriverJobs hook polls every 60s)
+//   4. DELETE /api/auth (logout)      → set to epoch (1970), forces offline immediately
+//
+// Status thresholds:
+//   active  → lastActiveAt within the last 10 minutes
+//   idle    → lastActiveAt within the last 2 hours
+//   offline → lastActiveAt older than 2 hours, or never set
+//
+// This means a driver shows as "active" as long as they have the app open
+// (AuthContext re-checks the session on every navigation), and "idle" if
+// the app is open but they haven't fetched jobs recently.
+
 import { NextRequest, NextResponse } from "next/server";
-import { MongoClient, Db } from "mongodb";
+import { ObjectId } from "mongodb";
 import * as jwt from "jsonwebtoken";
+import { connectDB } from "@/lib/mongodb";
 
-const MONGODB_URI = process.env.MONGODB_URI!;
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key-change-in-production";
-
-let client: MongoClient;
-let db: Db;
-
-async function connectDB() {
-  if (!client) {
-    client = new MongoClient(MONGODB_URI);
-    await client.connect();
-    db = client.db("greenkidsa");
-  }
-  return db;
-}
 
 function isAdmin(req: NextRequest) {
   try {
@@ -28,8 +37,9 @@ function isAdmin(req: NextRequest) {
   }
 }
 
-// GET /api/admin/drivers
-// Returns all driver users enriched with their current active job address (if any).
+const ACTIVE_MS = 10 * 60 * 1000;   // 10 minutes  → "active"
+const IDLE_MS   =  2 * 60 * 60 * 1000; // 2 hours  → "idle"
+
 export async function GET(req: NextRequest) {
   if (!isAdmin(req)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -42,15 +52,16 @@ export async function GET(req: NextRequest) {
 
     const drivers = await users
       .find({ role: "driver" })
-      .sort({ totalJobsCompleted: -1 })
+      .sort({ lastActiveAt: -1, totalJobsCompleted: -1 })
       .limit(100)
       .toArray();
 
-    // Find any in-progress jobs for each driver
+    // Find active (in-progress) jobs for each driver
+    const driverIds = drivers.map((d) => d._id.toString());
     const activeJobs = await requests
       .find({
-        status: { $in: ["en_route", "arrived", "collecting"] },
-        collectorId: { $in: drivers.map((d) => d._id.toString()) },
+        status:      { $in: ["en_route", "arrived", "collecting"] },
+        collectorId: { $in: driverIds },
       })
       .project({ collectorId: 1, address: 1 })
       .toArray();
@@ -60,30 +71,28 @@ export async function GET(req: NextRequest) {
       activeJobMap[job.collectorId] = job.address;
     }
 
-    // Determine driver status based on last activity
     const now = Date.now();
-    const ACTIVE_THRESHOLD_MS  = 8  * 60 * 60 * 1000; // 8 hours
-    const IDLE_THRESHOLD_MS    = 24 * 60 * 60 * 1000; // 24 hours
 
     const enriched = drivers.map((d) => {
-      const driverId = d._id.toString();
+      const driverId   = d._id.toString();
       const lastActive = d.lastActiveAt ? new Date(d.lastActiveAt).getTime() : 0;
-      const timeSince  = now - lastActive;
+      const elapsed    = now - lastActive;
 
-      let status: "active" | "idle" | "offline" = "offline";
-      if (activeJobMap[driverId])            status = "active";
-      else if (timeSince < ACTIVE_THRESHOLD_MS) status = "active";
-      else if (timeSince < IDLE_THRESHOLD_MS)   status = "idle";
+      let status: "active" | "idle" | "offline";
+      if (elapsed <= ACTIVE_MS)  status = "active";
+      else if (elapsed <= IDLE_MS) status = "idle";
+      else                       status = "offline";
 
       return {
-        _id: driverId,
-        name: d.name,
-        email: d.email,
+        _id:                driverId,
+        name:               d.name,
+        email:              d.email,
         totalJobsCompleted: d.totalJobsCompleted ?? 0,
         totalKgCollected:   d.totalKgCollected   ?? 0,
         totalPoints:        d.totalPoints        ?? 0,
         activeJob:          activeJobMap[driverId] ?? null,
         status,
+        lastActiveAt:       d.lastActiveAt ?? null,
       };
     });
 

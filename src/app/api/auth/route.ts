@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ObjectId } from "mongodb";
 import * as jwt from "jsonwebtoken";
 import * as bcrypt from "bcryptjs";
 import { connectDB } from "@/lib/mongodb";
@@ -19,7 +20,22 @@ function setCookie(res: NextResponse, token: string) {
   });
 }
 
+// Silently touch lastActiveAt for drivers — used by admin dashboard presence.
+// Fire-and-forget: we never await this so it never blocks the response.
+function touchLastActive(userId: string) {
+  connectDB()
+    .then((db) =>
+      db.collection("users").updateOne(
+        { _id: new ObjectId(userId) },
+        { $set: { lastActiveAt: new Date() } }
+      )
+    )
+    .catch(() => {});
+}
+
 // GET /api/auth — verify current session
+// Called on every page load by AuthContext. We use it to keep lastActiveAt
+// fresh for driver presence so the admin dashboard shows accurate online status.
 export async function GET(req: NextRequest) {
   try {
     const token = req.cookies.get("auth-token")?.value;
@@ -29,8 +45,18 @@ export async function GET(req: NextRequest) {
       userId: string; name: string; email: string; role: string;
     };
 
+    // Refresh presence for drivers (non-blocking)
+    if (payload.role === "driver") {
+      touchLastActive(payload.userId);
+    }
+
     return NextResponse.json({
-      user: { id: payload.userId, name: payload.name, email: payload.email, role: payload.role || "user" },
+      user: {
+        id:    payload.userId,
+        name:  payload.name,
+        email: payload.email,
+        role:  payload.role || "user",
+      },
     });
   } catch {
     return NextResponse.json({ user: null });
@@ -51,8 +77,18 @@ export async function POST(req: NextRequest) {
       const match = await bcrypt.compare(password, user.passwordHash);
       if (!match) return NextResponse.json({ error: "Incorrect password" }, { status: 401 });
 
+      // Mark driver as active immediately on login
+      if (user.role === "driver") {
+        await users.updateOne(
+          { _id: user._id },
+          { $set: { lastActiveAt: new Date() } }
+        );
+      }
+
       const token = makeToken({ userId: user._id.toString(), name: user.name, email: user.email, role: user.role || "user" });
-      const res   = NextResponse.json({ user: { id: user._id.toString(), name: user.name, email: user.email, role: user.role || "user" } });
+      const res   = NextResponse.json({
+        user: { id: user._id.toString(), name: user.name, email: user.email, role: user.role || "user" },
+      });
       setCookie(res, token);
       return res;
     }
@@ -66,13 +102,27 @@ export async function POST(req: NextRequest) {
 
       const passwordHash = await bcrypt.hash(password, 12);
       const result = await users.insertOne({
-        name: name.trim(), email: email.toLowerCase().trim(), passwordHash,
-        role: "user", totalPoints: 0, totalJobsCompleted: 0, totalKgCollected: 0,
-        createdAt: new Date(), updatedAt: new Date(),
+        name:               name.trim(),
+        email:              email.toLowerCase().trim(),
+        passwordHash,
+        role:               "user",
+        totalPoints:        0,
+        totalJobsCompleted: 0,
+        totalKgCollected:   0,
+        lastActiveAt:       new Date(),
+        createdAt:          new Date(),
+        updatedAt:          new Date(),
       });
 
-      const token = makeToken({ userId: result.insertedId.toString(), name: name.trim(), email: email.toLowerCase().trim(), role: "user" });
-      const res   = NextResponse.json({ user: { id: result.insertedId.toString(), name: name.trim(), email: email.toLowerCase().trim(), role: "user" } });
+      const token = makeToken({
+        userId: result.insertedId.toString(),
+        name:   name.trim(),
+        email:  email.toLowerCase().trim(),
+        role:   "user",
+      });
+      const res = NextResponse.json({
+        user: { id: result.insertedId.toString(), name: name.trim(), email: email.toLowerCase().trim(), role: "user" },
+      });
       setCookie(res, token);
       return res;
     }
@@ -85,7 +135,24 @@ export async function POST(req: NextRequest) {
 }
 
 // DELETE /api/auth — logout
-export async function DELETE() {
+// Clears lastActiveAt so the driver immediately shows as offline.
+export async function DELETE(req: NextRequest) {
+  try {
+    const token = req.cookies.get("auth-token")?.value;
+    if (token) {
+      const payload = jwt.verify(token, JWT_SECRET) as { userId: string; role: string };
+      if (payload.role === "driver") {
+        const db = await connectDB();
+        await db.collection("users").updateOne(
+          { _id: new ObjectId(payload.userId) },
+          { $set: { lastActiveAt: new Date(0) } } // epoch = effectively offline
+        );
+      }
+    }
+  } catch {
+    // If token is invalid, just clear the cookie anyway
+  }
+
   const res = NextResponse.json({ success: true });
   res.cookies.set("auth-token", "", { maxAge: 0, path: "/" });
   return res;
