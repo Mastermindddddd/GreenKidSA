@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { useMediaQuery } from "@/hooks/useMediaQuery"
 import { useAuth } from "@/context/AuthContext"
 import AuthModal from "@/components/AuthModal"
+import Image from "next/image"
 
 interface HeaderProps {
   onMenuClick: () => void
@@ -85,17 +86,23 @@ export default function Header({ onMenuClick, totalEarnings }: HeaderProps) {
                 className="p-2 rounded-lg text-gray-500 hover:text-green-700 hover:bg-green-50/60 transition-all duration-200"
                 aria-label="Toggle menu"
               >
-                <Menu className="h-5 w-5" />
+                <Menu className="h-7 w-7" />
               </button>
 
-              <Link href="/" className="flex items-center gap-1.5 group">
-                <div className="w-7 h-7 rounded-lg bg-green-600 flex items-center justify-center shadow-sm group-hover:bg-green-700 transition-colors duration-200">
-                  <Leaf className="h-4 w-4 text-white" />
-                </div>
-                <span className="font-semibold text-gray-800 tracking-tight text-base hidden sm:block">
-                  GreenKidSA
-                </span>
-              </Link>
+              <Link href="/" className="flex items-center group">
+  <Image
+    src="/logo.png"
+    alt="GreenKidSA Logo"
+    width={72}
+    height={72}
+    className="hidden sm:block object-contain shrink-0"
+  />
+  <div className="hidden sm:flex flex-col justify-center items-center leading-none">
+    <span className="font-bold text-green-800 text-md tracking-tight">
+      GreenKidSA
+    </span>
+  </div>
+</Link>
             </div>
 
             {/* Centre: search (desktop) */}

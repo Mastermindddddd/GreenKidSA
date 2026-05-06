@@ -4,6 +4,7 @@ import Link from "next/link"
 import { usePathname } from 'next/navigation'
 import { MapPin, Trash, Coins, Medal, Settings, Home, Truck, ShieldCheck, Leaf, X } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
+import Image from "next/image"
 
 const PUBLIC_ITEMS = [
   { href: "/",                   icon: Home,       label: "Home" },
@@ -60,11 +61,17 @@ export default function Sidebar({ open, onClose }: SidebarProps) {
       >
         {/* Header row inside sidebar */}
         <div className="h-[74px] flex items-center justify-between px-5 border-b border-gray-100/80 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-green-600 flex items-center justify-center shadow-sm">
-              <Leaf className="h-4 w-4 text-white" />
+          <div className="flex items-center">
+            <div className="flex items-center justify-center shadow-sm">
+              <Image
+                  src="/logo.png"
+                  alt="GreenKidSA Logo"
+                  width={72}
+                  height={72}
+                  className="object-contain shrink-0"
+                />
             </div>
-            <span className="font-semibold text-gray-800 tracking-tight text-sm">GreenKidSA</span>
+            <span className="font-semibold text-gray-800 tracking-tight text-md">GreenKidSA</span>
           </div>
           <button
             onClick={onClose}
