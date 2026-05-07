@@ -2,6 +2,8 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { ArrowRight, Leaf, Recycle, Users, Coins, MapPin, Wind } from 'lucide-react'
+import { useAuth } from '@/context/AuthContext'        
+import AuthModal from '@/components/AuthModal'
 import { Button } from '@/components/ui/button'
 import { Poppins } from 'next/font/google'
 import Link from 'next/link'
@@ -14,7 +16,8 @@ const poppins = Poppins({
 })
 
 export default function Home() {
-  const [loggedIn, setLoggedIn] = useState(false)
+  const { user } = useAuth()                                       
+  const [authModalOpen, setAuthModalOpen] = useState(false)  
   const [impactData, setImpactData] = useState({
     wasteCollected: 0,
     reportsSubmitted: 0,
@@ -127,22 +130,23 @@ export default function Home() {
                 className="blur-in flex flex-col sm:flex-row gap-4"
                 style={{ animationDelay: '0.85s' }}
               >
-                {!loggedIn ? (
-                  <button
-                    onClick={() => setLoggedIn(true)}
-                    className="group inline-flex items-center justify-center gap-3 bg-white text-green-900 px-8 py-4 rounded-full text-sm tracking-wide font-semibold transition-all duration-300 hover:bg-green-50 shadow-2xl shadow-black/20"
-                  >
-                    Enter Platform
+                {!user ? (                                            // ← was !loggedIn
+                <button
+                  onClick={() => setAuthModalOpen(true)}           // ← opens modal instead of setLoggedIn
+                  className="group inline-flex items-center justify-center gap-3 bg-white text-green-900 px-8 py-4 rounded-full text-sm tracking-wide font-semibold transition-all duration-300 hover:bg-green-50 shadow-2xl shadow-black/20"
+                >
+                  Enter Platform
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-300" />
+                </button>
+              ) : (
+                <Link href="/report">
+                  <button className="group inline-flex items-center justify-center gap-3 bg-white text-green-900 px-8 py-4 rounded-full text-sm tracking-wide font-semibold transition-all duration-300 hover:bg-green-50 shadow-2xl shadow-black/20">
+                    Report Waste
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-300" />
                   </button>
-                ) : (
-                  <Link href="/report">
-                    <button className="group inline-flex items-center justify-center gap-3 bg-white text-green-900 px-8 py-4 rounded-full text-sm tracking-wide font-semibold transition-all duration-300 hover:bg-green-50 shadow-2xl shadow-black/20">
-                      Report Waste
-                      <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-300" />
-                    </button>
-                  </Link>
-                )}
+                </Link>
+              )}
+
 
                 <Link href="/leaderboard">
                   <button className="inline-flex items-center justify-center gap-2 border border-white/30 text-white/90 px-8 py-4 rounded-full text-sm tracking-wide font-medium backdrop-blur-sm bg-white/10 transition-all duration-300 hover:bg-white/20">
@@ -187,6 +191,11 @@ export default function Home() {
           </div>
         </div>
       </section>
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => setAuthModalOpen(false)}
+        defaultMode="login"
+      />
     </div>
   )
 }
