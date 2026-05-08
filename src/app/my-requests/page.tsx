@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation'
 import {
   Leaf, Clock, CheckCircle, Trash2, Package, BadgeCheck,
   MapPin, Calendar, Weight, Loader2, RefreshCw, ChevronDown,
-  ChevronUp, Camera, Zap, AlertTriangle, ArrowRight, Plus
+  ChevronUp, Camera, Zap, Plus, User, Star, Briefcase,
+  CircleDot, Mail
 } from 'lucide-react'
 import { toast } from 'react-hot-toast'
 
@@ -31,6 +32,19 @@ interface WasteRequest {
   updatedAt: string
   verifiedAt?: string
   rewardTokens?: number
+}
+
+interface DriverProfile {
+  id: string
+  name: string
+  email: string
+  role: string
+  totalPoints: number
+  totalJobsCompleted: number
+  totalKgCollected: number
+  lastActiveAt: string | null
+  createdAt: string | null
+  isOnline: boolean
 }
 
 // ─── Status config ────────────────────────────────────────────────────────────
@@ -222,6 +236,21 @@ function RequestCard({ request: r, expanded, onToggle }: {
 }) {
   const cfg = STATUS_CONFIG[r.status] ?? STATUS_CONFIG['pending']
   const currentStep = cfg.step
+  const [driver, setDriver] = useState<DriverProfile | null>(null)
+  const [driverLoading, setDriverLoading] = useState(false)
+  const [driverError, setDriverError] = useState(false)
+
+  // Fetch driver profile once when card expands and a collectorId exists
+  useEffect(() => {
+    if (!expanded || !r.collectorId || driver || driverLoading) return
+    setDriverLoading(true)
+    setDriverError(false)
+    fetch(`/api/users/${r.collectorId}`)
+      .then(res => res.ok ? res.json() : Promise.reject())
+      .then(data => setDriver(data.user))
+      .catch(() => setDriverError(true))
+      .finally(() => setDriverLoading(false))
+  }, [expanded, r.collectorId])
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -248,7 +277,6 @@ function RequestCard({ request: r, expanded, onToggle }: {
           </div>
 
           <div className="flex items-center gap-3 flex-shrink-0">
-            {/* Status badge */}
             <span className="hidden sm:flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold"
               style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}>
               <cfg.Icon className="h-3 w-3" />{cfg.label}
@@ -257,7 +285,7 @@ function RequestCard({ request: r, expanded, onToggle }: {
           </div>
         </div>
 
-        {/* Progress tracker — always visible */}
+        {/* Progress tracker */}
         <div className="mt-4">
           <ProgressTracker currentStep={currentStep} />
         </div>
@@ -267,15 +295,103 @@ function RequestCard({ request: r, expanded, onToggle }: {
       {expanded && (
         <div className="border-t border-gray-50 px-5 pb-5 pt-4 space-y-4">
 
-          {/* Status description */}
+          {/* Status banner */}
           <div className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium"
             style={{ background: cfg.bg, color: cfg.color }}>
             <cfg.Icon className="h-4 w-4 flex-shrink-0" />
             {cfg.desc}
-            {r.collectorName && r.status !== 'pending' && (
-              <span className="text-xs opacity-75 ml-auto">Collector: {r.collectorName}</span>
-            )}
           </div>
+
+          {/* ── Assigned Driver Card ── */}
+          {r.collectorId && r.status !== 'pending' && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-400 mb-2 flex items-center gap-1">
+                <User className="h-3 w-3" /> Assigned Collector
+              </p>
+
+              {driverLoading && (
+                <div className="flex items-center gap-3 px-4 py-4 rounded-2xl border border-gray-100 bg-gray-50">
+                  <Loader2 className="h-5 w-5 text-green-400 animate-spin" />
+                  <span className="text-xs text-gray-400">Loading collector details…</span>
+                </div>
+              )}
+
+              {driverError && (
+                <div className="px-4 py-3 rounded-2xl border border-gray-100 bg-gray-50 text-xs text-gray-500">
+                  Could not load collector profile.
+                  {r.collectorName && <span className="font-semibold text-gray-700"> Name: {r.collectorName}</span>}
+                </div>
+              )}
+
+              {driver && !driverLoading && (
+                <div className="rounded-2xl border border-green-100 overflow-hidden"
+                  style={{ background: 'linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%)' }}>
+
+                  {/* Driver header */}
+                  <div className="flex items-center gap-4 px-4 py-4 border-b border-green-50">
+                    {/* Avatar */}
+                    <div className="relative flex-shrink-0">
+                      <div className="w-12 h-12 rounded-2xl flex items-center justify-center text-lg font-bold text-white"
+                        style={{ background: 'linear-gradient(135deg, #16a34a, #15803d)' }}>
+                        {driver.name.charAt(0).toUpperCase()}
+                      </div>
+                      {/* Online dot */}
+                      <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white"
+                        style={{ background: driver.isOnline ? '#16a34a' : '#9ca3af' }} />
+                    </div>
+
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-bold text-gray-800">{driver.name}</span>
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full capitalize"
+                          style={{ background: '#dcfce7', color: '#15803d' }}>
+                          {driver.role}
+                        </span>
+                        <span className="flex items-center gap-1 text-[10px] font-semibold"
+                          style={{ color: driver.isOnline ? '#16a34a' : '#9ca3af' }}>
+                          <CircleDot className="h-2.5 w-2.5" />
+                          {driver.isOnline ? 'Online' : 'Offline'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5 truncate">
+                        <Mail className="h-3 w-3 flex-shrink-0" />{driver.email}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Driver stats */}
+                  <div className="grid grid-cols-3 divide-x divide-green-50">
+                    <DriverStat
+                      icon={<Briefcase className="h-3.5 w-3.5" />}
+                      label="Jobs done"
+                      value={driver.totalJobsCompleted.toString()}
+                    />
+                    <DriverStat
+                      icon={<Star className="h-3.5 w-3.5" />}
+                      label="Green tokens"
+                      value={driver.totalPoints.toString()}
+                    />
+                    <DriverStat
+                      icon={<Weight className="h-3.5 w-3.5" />}
+                      label="kg collected"
+                      value={driver.totalKgCollected > 0 ? `${driver.totalKgCollected}` : '—'}
+                    />
+                  </div>
+
+                  {/* Last active */}
+                  {driver.lastActiveAt && !driver.isOnline && (
+                    <div className="px-4 py-2 border-t border-green-50">
+                      <p className="text-[10px] text-gray-400">
+                        Last seen {new Date(driver.lastActiveAt).toLocaleString('en-ZA', {
+                          day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit'
+                        })}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Details grid */}
           <div className="grid grid-cols-2 gap-3 text-xs text-gray-600">
@@ -327,6 +443,17 @@ function RequestCard({ request: r, expanded, onToggle }: {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── DriverStat ───────────────────────────────────────────────────────────────
+function DriverStat({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  return (
+    <div className="flex flex-col items-center py-3 gap-0.5">
+      <div className="flex items-center gap-1 text-green-600 mb-1">{icon}</div>
+      <span className="text-sm font-bold text-gray-800">{value}</span>
+      <span className="text-[10px] text-gray-400 text-center leading-tight">{label}</span>
     </div>
   )
 }
