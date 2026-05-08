@@ -232,7 +232,7 @@ export default function RequestCollectionPage() {
 
   // ── Main form ──────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen pb-16" style={{ background: 'linear-gradient(160deg, #f0fdf4 0%, #ffffff 50%, #f7fee7 100%)' }}>
+    <div className="min-h-screen pb-16 mt-20" style={{ background: 'linear-gradient(160deg, #f0fdf4 0%, #ffffff 50%, #f7fee7 100%)' }}>
       {/* Page header */}
       <div className="relative overflow-hidden" style={{ background: 'linear-gradient(135deg, #14532d 0%, #16a34a 100%)' }}>
         <div className="absolute inset-0 opacity-10"

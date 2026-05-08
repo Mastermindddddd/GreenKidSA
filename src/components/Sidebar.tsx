@@ -2,16 +2,17 @@
 'use client'
 import Link from "next/link"
 import { usePathname } from 'next/navigation'
-import { MapPin, Trash, Coins, Medal, Settings, Home, Truck, ShieldCheck, Leaf, X } from "lucide-react"
+import { MapPin, Trash, Coins, Medal, Settings, Home, Truck, ShieldCheck, Leaf, X, ClipboardList } from "lucide-react"
 import { useAuth } from "@/context/AuthContext"
 import Image from "next/image"
 
 const PUBLIC_ITEMS = [
   { href: "/",                   icon: Home,       label: "Home" },
   { href: "/request-collection", icon: MapPin,     label: "Report Waste" },
-  { href: "/collect",            icon: Trash,      label: "Collect Waste" },
+  //{ href: "/collect",            icon: Trash,      label: "Collect Waste" },
   { href: "/rewards",            icon: Coins,      label: "Rewards" },
   { href: "/leaderboard",        icon: Medal,      label: "Leaderboard" },
+  { href: "/my-requests", icon: ClipboardList, label: "My Requests" },
 ]
 
 const DRIVER_ITEMS = [
