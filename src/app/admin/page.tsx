@@ -1,7 +1,7 @@
 // Path: /app/admin/page.tsx
 // @ts-nocheck
 "use client";
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "@/context/AuthContext";
 import { useRouter } from "next/navigation";
 import {
@@ -9,9 +9,11 @@ import {
   BarChart3, RefreshCw, CheckCircle2, Clock, AlertTriangle,
   XCircle, ChevronRight, Search, MapPin, Weight,
   Zap, Leaf, Recycle, Package, TrendingUp, TrendingDown,
-  UserCheck, Download, Loader2, Circle, Shield,
+  UserCheck, Download, Loader2, Circle, Shield, Navigation,
+  Timer, Wifi, WifiOff, Radio,
 } from "lucide-react";
 
+// ─── Types ────────────────────────────────────────────────────────────────────
 interface Request {
   _id: string; userName: string; userEmail: string; address: string;
   location: string; wasteType: string; amount: string;
@@ -23,6 +25,7 @@ interface Driver {
   _id: string; name: string; email: string;
   totalJobsCompleted: number; totalKgCollected: number; totalPoints: number;
   activeJob?: string; status: "active"|"idle"|"offline";
+  lastActiveAt?: string;
 }
 interface TruckType {
   _id: string; plate: string; model: string;
@@ -37,19 +40,20 @@ interface Stats {
   openIssues: number; requestsTrend: number; completionRate: number;
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
 const NAV_ITEMS = [
-  { id: "overview", label: "Overview", Icon: LayoutDashboard },
-  { id: "requests", label: "Requests", Icon: Inbox },
-  { id: "drivers",  label: "Drivers",  Icon: Users },
-  { id: "trucks",   label: "Trucks",   Icon: Truck },
-  { id: "activity", label: "Activity", Icon: Activity },
-  { id: "reports",  label: "Reports",  Icon: BarChart3 },
+  { id: "overview", label: "Overview",  Icon: LayoutDashboard },
+  { id: "requests", label: "Requests",  Icon: Inbox },
+  { id: "drivers",  label: "Drivers",   Icon: Users },
+  { id: "trucks",   label: "Trucks",    Icon: Truck },
+  { id: "activity", label: "Activity",  Icon: Activity },
+  { id: "reports",  label: "Reports",   Icon: BarChart3 },
 ];
 
-const STATUS_META: Record<string, { label: string; color: string; bg: string; dot: string; Icon: any }> = {
+const STATUS_META: Record<string, { label:string; color:string; bg:string; dot:string; Icon:any }> = {
   pending:    { label:"Pending",    color:"#92400e", bg:"#FEF9EE", dot:"#F59E0B", Icon:Clock },
   assigned:   { label:"Assigned",   color:"#1e40af", bg:"#EFF6FF", dot:"#3B82F6", Icon:UserCheck },
-  en_route:   { label:"En Route",   color:"#6d28d9", bg:"#F5F3FF", dot:"#8B5CF6", Icon:Truck },
+  en_route:   { label:"En Route",   color:"#6d28d9", bg:"#F5F3FF", dot:"#8B5CF6", Icon:Navigation },
   collecting: { label:"Collecting", color:"#065f46", bg:"#F0FDF9", dot:"#10B981", Icon:Package },
   collected:  { label:"Collected",  color:"#166534", bg:"#F0FDF4", dot:"#22C55E", Icon:CheckCircle2 },
   verified:   { label:"Verified",   color:"#14532d", bg:"#DCFCE7", dot:"#16A34A", Icon:CheckCircle2 },
@@ -60,12 +64,31 @@ const WASTE_ICONS: Record<string, any> = {
   general:Package, organic:Leaf, recycling:Recycle, hazardous:Zap,
 };
 
-const URGENCY: Record<string, { color: string; bg: string }> = {
+const URGENCY: Record<string, { color:string; bg:string }> = {
   high:   { color:"#DC2626", bg:"#FEF2F2" },
   normal: { color:"#D97706", bg:"#FFFBEB" },
   low:    { color:"#16A34A", bg:"#F0FDF4" },
 };
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function timeAgo(dateStr: string | null | undefined): string {
+  if (!dateStr) return "never";
+  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (diff < 60)   return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+  return `${Math.floor(diff/86400)}d ago`;
+}
+
+function fmtElapsed(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  const m = Math.floor(diff / 60);
+  const s = diff % 60;
+  return `${m}m ${s}s`;
+}
+
+// ─── Shared components ────────────────────────────────────────────────────────
 function StatusBadge({ status }: { status: string }) {
   const m = STATUS_META[status] ?? { label:status, color:"#374151", bg:"#F3F4F6", dot:"#9CA3AF", Icon:Circle };
   return (
@@ -73,6 +96,16 @@ function StatusBadge({ status }: { status: string }) {
       style={{ color:m.color, backgroundColor:m.bg }}>
       <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ backgroundColor:m.dot }} />
       {m.label}
+    </span>
+  );
+}
+
+/** Pulsing dot for live/en-route states */
+function LiveDot({ color = "#10B981" }: { color?: string }) {
+  return (
+    <span className="relative inline-flex w-2.5 h-2.5 flex-shrink-0">
+      <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-50" style={{ backgroundColor: color }} />
+      <span className="relative inline-flex rounded-full w-2.5 h-2.5" style={{ backgroundColor: color }} />
     </span>
   );
 }
@@ -101,6 +134,52 @@ function KpiCard({ label, value, sub, icon:Icon, trend, accent }: {
   );
 }
 
+// ─── Live Jobs strip — shown on Overview ──────────────────────────────────────
+function LiveJobsStrip({ requests }: { requests: Request[] }) {
+  const live = requests.filter(r => r.status === "en_route" || r.status === "collecting");
+  if (!live.length) return null;
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="px-4 lg:px-6 py-3 border-b border-gray-100 flex items-center gap-2">
+        <LiveDot color="#8B5CF6" />
+        <h3 className="font-black text-gray-900 text-sm tracking-tight">Jobs In Progress</h3>
+        <span className="ml-auto text-xs font-bold bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">{live.length} active</span>
+      </div>
+      <div className="divide-y divide-gray-50">
+        {live.map(r => {
+          const isEnRoute   = r.status === "en_route";
+          const stageColor  = isEnRoute ? "#8B5CF6" : "#10B981";
+          const stageBg     = isEnRoute ? "#F5F3FF"  : "#F0FDF9";
+          const stageLabel  = isEnRoute ? "En Route" : "Collecting";
+          const StageIcon   = isEnRoute ? Navigation  : Package;
+          return (
+            <div key={r._id} className="flex items-center gap-3 lg:gap-4 px-4 lg:px-6 py-3">
+              <LiveDot color={stageColor} />
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 text-sm truncate">{r.address}</p>
+                <p className="text-xs text-gray-400 truncate">{r.userName}</p>
+              </div>
+              <div className="hidden sm:flex items-center gap-1 text-xs text-gray-500 font-medium">
+                <Users className="w-3.5 h-3.5 text-gray-400"/>
+                {r.collectorName ?? "Unassigned"}
+              </div>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-black"
+                style={{ color:stageColor, backgroundColor:stageBg }}>
+                <StageIcon className="w-3 h-3"/>{stageLabel}
+              </span>
+              {r.urgency === "high" && (
+                <span className="hidden md:inline text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold">HIGH</span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── PANEL: Overview ──────────────────────────────────────────────────────────
 function OverviewPanel({ stats, requests, loading }: { stats:Stats; requests:Request[]; loading:boolean }) {
   return (
     <div className="space-y-5">
@@ -111,11 +190,16 @@ function OverviewPanel({ stats, requests, loading }: { stats:Stats; requests:Req
         <KpiCard label="Kg Collected"    value={stats.kgCollectedToday} sub="today"                              icon={Weight}       trend={12}                  accent="#14B8A6"/>
       </div>
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 lg:gap-4">
-        <KpiCard label="Trucks On Route" value={`${stats.trucksOnRoute}/${stats.totalTrucks}`} icon={Truck}       accent="#8B5CF6"/>
+        <KpiCard label="Trucks On Route" value={`${stats.trucksOnRoute}/${stats.totalTrucks}`} icon={Truck}        accent="#8B5CF6"/>
         <KpiCard label="Open Issues"     value={stats.openIssues} sub={stats.openIssues > 0 ? "need attention":"all clear"} icon={AlertTriangle} accent="#EF4444"/>
-        <KpiCard label="Assigned Jobs"   value={stats.assignedRequests} icon={UserCheck} accent="#0EA5E9"/>
-        <KpiCard label="Completion Rate" value={`${stats.completionRate}%`} icon={TrendingUp} trend={2} accent="#10B981"/>
+        <KpiCard label="Assigned Jobs"   value={stats.assignedRequests} icon={UserCheck}        accent="#0EA5E9"/>
+        <KpiCard label="Completion Rate" value={`${stats.completionRate}%`} icon={TrendingUp} trend={2}           accent="#10B981"/>
       </div>
+
+      {/* Live jobs — the most important admin visibility addition */}
+      <LiveJobsStrip requests={requests} />
+
+      {/* Recent requests table */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="px-4 lg:px-6 py-4 border-b border-gray-100 flex items-center justify-between">
           <h3 className="font-bold text-gray-900 text-sm">Recent Requests</h3>
@@ -135,14 +219,20 @@ function OverviewPanel({ stats, requests, loading }: { stats:Stats; requests:Req
             <tbody className="divide-y divide-gray-50">
               {requests.slice(0,8).map(r => {
                 const WIcon = WASTE_ICONS[r.wasteType] ?? Package;
-                const urg = URGENCY[r.urgency];
+                const urg   = URGENCY[r.urgency];
+                const isLive = r.status === "en_route" || r.status === "collecting";
                 return (
-                  <tr key={r._id} className="hover:bg-gray-50/60 transition-colors">
+                  <tr key={r._id} className={`hover:bg-gray-50/60 transition-colors ${isLive ? "bg-purple-50/30":""}`}>
                     <td className="px-4 lg:px-6 py-3">
                       <p className="font-semibold text-gray-800 text-sm">{r.userName}</p>
                       <p className="text-xs text-gray-400 hidden lg:block">{r.userEmail}</p>
                     </td>
-                    <td className="px-4 lg:px-6 py-3 text-gray-500 text-xs max-w-[140px] truncate">{r.address}</td>
+                    <td className="px-4 lg:px-6 py-3 text-gray-500 text-xs max-w-[140px] truncate">
+                      <div className="flex items-center gap-1.5">
+                        {isLive && <LiveDot color={r.status==="en_route"?"#8B5CF6":"#10B981"}/>}
+                        {r.address}
+                      </div>
+                    </td>
                     <td className="px-4 lg:px-6 py-3">
                       <span className="flex items-center gap-1 text-xs text-gray-600 font-medium">
                         <WIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"/>
@@ -168,15 +258,16 @@ function OverviewPanel({ stats, requests, loading }: { stats:Stats; requests:Req
   );
 }
 
+// ─── PANEL: Requests ──────────────────────────────────────────────────────────
 function RequestsPanel({ requests, drivers, loading, onAssign, onRefresh }: {
   requests:Request[]; drivers:Driver[]; loading:boolean;
   onAssign:(reqId:string,drvId:string,drvName:string)=>Promise<void>; onRefresh:()=>void;
 }) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch]           = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterUrgency, setFilterUrgency] = useState("all");
   const [assigningId, setAssigningId] = useState<string|null>(null);
-  const [expandedId, setExpandedId] = useState<string|null>(null);
+  const [expandedId, setExpandedId]   = useState<string|null>(null);
 
   const filtered = requests.filter(r => {
     const s = search.toLowerCase();
@@ -193,8 +284,14 @@ function RequestsPanel({ requests, drivers, loading, onAssign, onRefresh }: {
     finally { setAssigningId(null); }
   };
 
+  // Group in-progress at top
+  const inProgress = filtered.filter(r => r.status==="en_route"||r.status==="collecting");
+  const rest       = filtered.filter(r => r.status!=="en_route"&&r.status!=="collecting");
+  const ordered    = [...inProgress, ...rest];
+
   return (
     <div className="space-y-4">
+      {/* Filters */}
       <div className="flex flex-wrap gap-2 lg:gap-3">
         <div className="relative flex-1 min-w-[180px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400"/>
@@ -219,17 +316,32 @@ function RequestsPanel({ requests, drivers, loading, onAssign, onRefresh }: {
           <span className="hidden sm:inline">Refresh</span>
         </button>
       </div>
+
+      {inProgress.length > 0 && (
+        <div className="flex items-center gap-2 text-xs font-black text-purple-600 uppercase tracking-widest">
+          <LiveDot color="#8B5CF6"/> {inProgress.length} job{inProgress.length!==1?"s":""} in progress — shown first
+        </div>
+      )}
       <p className="text-xs text-gray-400 font-semibold">{filtered.length} result{filtered.length!==1?"s":""}</p>
+
       <div className="space-y-2">
-        {filtered.map(r => {
-          const WIcon = WASTE_ICONS[r.wasteType] ?? Package;
-          const isExp = expandedId===r._id;
-          const urg = URGENCY[r.urgency];
+        {ordered.map(r => {
+          const WIcon   = WASTE_ICONS[r.wasteType] ?? Package;
+          const isExp   = expandedId===r._id;
+          const urg     = URGENCY[r.urgency];
+          const isLive  = r.status==="en_route"||r.status==="collecting";
           return (
-            <div key={r._id} className={`bg-white rounded-2xl border transition-all overflow-hidden shadow-sm ${r.hasOpenIssue ? "border-red-200":"border-gray-100 hover:border-gray-200"}`}>
+            <div key={r._id} className={`bg-white rounded-2xl border transition-all overflow-hidden shadow-sm ${
+              r.hasOpenIssue ? "border-red-200"
+              : isLive       ? "border-purple-200"
+              : "border-gray-100 hover:border-gray-200"
+            }`}>
               <div className="flex items-center gap-3 lg:gap-4 px-4 lg:px-5 py-3 lg:py-4 cursor-pointer hover:bg-gray-50/50 transition-colors"
                 onClick={()=>setExpandedId(isExp?null:r._id)}>
-                <div className="w-1 h-8 rounded-full flex-shrink-0" style={{ backgroundColor:urg?.color }}/>
+                {isLive
+                  ? <LiveDot color={r.status==="en_route"?"#8B5CF6":"#10B981"}/>
+                  : <div className="w-1 h-8 rounded-full flex-shrink-0" style={{ backgroundColor:urg?.color }}/>
+                }
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-semibold text-gray-900 text-sm">{r.address}</span>
@@ -239,7 +351,10 @@ function RequestsPanel({ requests, drivers, loading, onAssign, onRefresh }: {
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-gray-400 mt-0.5">{r.userName} · {new Date(r.createdAt).toLocaleDateString("en-ZA")}</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {r.userName} · {new Date(r.createdAt).toLocaleDateString("en-ZA")}
+                    {r.collectorName && <> · <span className="text-gray-600 font-medium">{r.collectorName}</span></>}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2 lg:gap-3 flex-shrink-0">
                   <span className="hidden md:flex items-center gap-1 text-xs text-gray-500 font-medium">
@@ -249,10 +364,16 @@ function RequestsPanel({ requests, drivers, loading, onAssign, onRefresh }: {
                   <ChevronRight className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${isExp?"rotate-90":""}`}/>
                 </div>
               </div>
+
               {isExp && (
                 <div className="border-t border-gray-100 px-4 lg:px-5 py-4 bg-gray-50/60 space-y-4">
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
-                    {[{label:"Amount",value:r.amount},{label:"Preferred Time",value:r.preferredTime||"—"},{label:"Urgency",value:<span className="capitalize">{r.urgency}</span>},{label:"Driver",value:r.collectorName??"Unassigned"}].map(({label,value})=>(
+                    {[
+                      {label:"Amount",       value:r.amount},
+                      {label:"Preferred Time",value:r.preferredTime||"—"},
+                      {label:"Urgency",      value:<span className="capitalize">{r.urgency}</span>},
+                      {label:"Driver",       value:r.collectorName??"Unassigned"},
+                    ].map(({label,value})=>(
                       <div key={label}>
                         <p className="text-xs text-gray-400 mb-0.5 font-medium">{label}</p>
                         <p className="font-semibold text-gray-800">{value}</p>
@@ -265,17 +386,17 @@ function RequestsPanel({ requests, drivers, loading, onAssign, onRefresh }: {
                         className="flex-1 px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-green-400/40 min-w-0">
                         <option value="" disabled>Select a driver…</option>
                         {["active","idle","offline"].map(s=>{
-                          const group=drivers.filter(d=>d.status===s);
+                          const group = drivers.filter(d=>d.status===s);
                           if(!group.length) return null;
                           return (
                             <optgroup key={s} label={s==="active"?"● Online":s==="idle"?"◑ Idle":"○ Offline"}>
-                              {group.map(d=><option key={d._id} value={d._id}>{d.name}</option>)}
+                              {group.map(d=><option key={d._id} value={d._id}>{d.name}{d.activeJob?" (on job)":""}</option>)}
                             </optgroup>
                           );
                         })}
                       </select>
                       <button
-                        onClick={()=>{const sel=document.getElementById(`assign-${r._id}`) as HTMLSelectElement; if(sel.value) handleAssign(r._id,sel.value);}}
+                        onClick={()=>{ const sel=document.getElementById(`assign-${r._id}`) as HTMLSelectElement; if(sel.value) handleAssign(r._id,sel.value); }}
                         disabled={assigningId===r._id}
                         className="px-4 lg:px-5 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 text-white text-sm font-bold transition-colors disabled:opacity-50 flex items-center gap-2 flex-shrink-0">
                         {assigningId===r._id ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <UserCheck className="w-3.5 h-3.5"/>}
@@ -299,57 +420,140 @@ function RequestsPanel({ requests, drivers, loading, onAssign, onRefresh }: {
   );
 }
 
+// ─── PANEL: Drivers ───────────────────────────────────────────────────────────
 function DriversPanel({ drivers, loading }: { drivers:Driver[]; loading:boolean }) {
+  // Live-updating "elapsed on job" timer
+  const [, forceUpdate] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval>>();
+  useEffect(() => {
+    timerRef.current = setInterval(() => forceUpdate(n => n+1), 5000);
+    return () => clearInterval(timerRef.current);
+  }, []);
+
   const SS = {
-    active:  { color:"#16A34A", bg:"#F0FDF4", dot:"#22C55E", label:"Active" },
-    idle:    { color:"#D97706", bg:"#FFFBEB", dot:"#F59E0B", label:"Idle" },
-    offline: { color:"#6B7280", bg:"#F9FAFB", dot:"#9CA3AF", label:"Offline" },
+    active:  { color:"#16A34A", bg:"#F0FDF4", dot:"#22C55E", label:"Online",  Icon:Wifi },
+    idle:    { color:"#D97706", bg:"#FFFBEB", dot:"#F59E0B", label:"Idle",    Icon:Radio },
+    offline: { color:"#6B7280", bg:"#F9FAFB", dot:"#9CA3AF", label:"Offline", Icon:WifiOff },
   };
+
+  // Sort: active-with-job → active-without-job → idle → offline
+  const sorted = [...drivers].sort((a,b) => {
+    const rank = (d: Driver) =>
+      d.status==="active" && d.activeJob ? 0
+      : d.status==="active"              ? 1
+      : d.status==="idle"                ? 2
+      : 3;
+    return rank(a) - rank(b);
+  });
+
   if (loading) return <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-green-600"/></div>;
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-      {drivers.map(d => {
-        const ss = SS[d.status];
-        const initials = d.name.split(" ").map(p=>p[0]).slice(0,2).join("").toUpperCase();
-        return (
-          <div key={d._id} className="bg-white rounded-2xl border border-gray-100 p-5 space-y-4 shadow-sm hover:shadow-md transition-all duration-200">
-            <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-full bg-gradient-to-br from-green-400 to-emerald-600 text-white font-black text-sm flex items-center justify-center shadow-sm flex-shrink-0">{initials}</div>
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-gray-900 truncate text-sm">{d.name}</p>
-                <p className="text-xs text-gray-400 truncate">{d.email}</p>
-              </div>
-              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold flex-shrink-0" style={{ color:ss.color, backgroundColor:ss.bg }}>
-                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor:ss.dot }}/>{ss.label}
-              </span>
+    <div className="space-y-4">
+      {/* Quick summary pills */}
+      <div className="flex gap-3 flex-wrap">
+        {(["active","idle","offline"] as const).map(s => {
+          const count = drivers.filter(d=>d.status===s).length;
+          const meta  = SS[s];
+          return (
+            <div key={s} className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border border-gray-100 bg-white shadow-sm"
+              style={{ color:meta.color }}>
+              <span className="w-2 h-2 rounded-full" style={{ backgroundColor:meta.dot }}/>
+              {count} {meta.label}
             </div>
-            {d.activeJob && (
-              <div className="bg-emerald-50 border border-emerald-100 rounded-xl px-3 py-2">
-                <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest mb-0.5">Active Job</p>
-                <p className="text-xs text-emerald-800 font-medium truncate">{d.activeJob}</p>
-              </div>
-            )}
-            <div className="grid grid-cols-3 gap-2">
-              {[{label:"Jobs",value:d.totalJobsCompleted},{label:"Kg",value:d.totalKgCollected?.toFixed(0)??"0"},{label:"Points",value:d.totalPoints}].map(({label,value})=>(
-                <div key={label} className="bg-gray-50 rounded-xl py-3 text-center">
-                  <p className="font-black text-gray-900 font-mono text-lg">{value}</p>
-                  <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mt-0.5">{label}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        );
-      })}
-      {drivers.length===0 && (
-        <div className="col-span-full text-center py-20 text-gray-400">
-          <Users className="w-10 h-10 mx-auto mb-3 opacity-20"/>
-          <p className="font-semibold">No drivers registered yet</p>
+          );
+        })}
+        <div className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold border border-purple-100 bg-purple-50 text-purple-700 shadow-sm">
+          <LiveDot color="#8B5CF6"/>
+          {drivers.filter(d=>d.activeJob).length} on job now
         </div>
-      )}
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+        {sorted.map(d => {
+          const ss       = SS[d.status];
+          const SIcon    = ss.Icon;
+          const initials = d.name.split(" ").map(p=>p[0]).slice(0,2).join("").toUpperCase();
+          const onJob    = !!d.activeJob;
+
+          return (
+            <div key={d._id} className={`bg-white rounded-2xl border p-5 space-y-4 shadow-sm hover:shadow-md transition-all duration-200 ${
+              onJob ? "border-purple-200":"border-gray-100"
+            }`}>
+              {/* Header */}
+              <div className="flex items-center gap-3">
+                <div className="relative flex-shrink-0">
+                  <div className="w-11 h-11 rounded-full bg-gradient-to-br from-green-400 to-emerald-600 text-white font-black text-sm flex items-center justify-center shadow-sm">
+                    {initials}
+                  </div>
+                  {onJob && (
+                    <span className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full bg-purple-500 border-2 border-white flex items-center justify-center">
+                      <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"/>
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-gray-900 truncate text-sm">{d.name}</p>
+                  <p className="text-xs text-gray-400 truncate">{d.email}</p>
+                </div>
+                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold flex-shrink-0" style={{ color:ss.color, backgroundColor:ss.bg }}>
+                  <SIcon className="w-3 h-3"/>
+                  {ss.label}
+                </span>
+              </div>
+
+              {/* Active job block — the main new addition */}
+              {onJob ? (
+                <div className="rounded-xl overflow-hidden border border-purple-100">
+                  <div className="bg-purple-600 px-3 py-1.5 flex items-center gap-2">
+                    <LiveDot color="#c4b5fd"/>
+                    <span className="text-[10px] font-black text-purple-100 uppercase tracking-widest">On Job Now</span>
+                  </div>
+                  <div className="bg-purple-50 px-3 py-2.5 space-y-1">
+                    <p className="text-xs text-purple-900 font-semibold leading-snug">{d.activeJob}</p>
+                    <div className="flex items-center gap-1.5 text-[11px] text-purple-500 font-medium">
+                      <Timer className="w-3 h-3"/>
+                      Active for {timeAgo(d.lastActiveAt)}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-xl bg-gray-50 border border-gray-100 px-3 py-2.5">
+                  <p className="text-xs text-gray-400 font-medium">No active job</p>
+                  {d.lastActiveAt && (
+                    <p className="text-[11px] text-gray-400 mt-0.5">Last seen {timeAgo(d.lastActiveAt)}</p>
+                  )}
+                </div>
+              )}
+
+              {/* Stats */}
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  {label:"Jobs",   value:d.totalJobsCompleted},
+                  {label:"Kg",     value:d.totalKgCollected?.toFixed(0)??"0"},
+                  {label:"Points", value:d.totalPoints},
+                ].map(({label,value})=>(
+                  <div key={label} className="bg-gray-50 rounded-xl py-3 text-center">
+                    <p className="font-black text-gray-900 font-mono text-lg">{value}</p>
+                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wide mt-0.5">{label}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {drivers.length===0 && (
+          <div className="col-span-full text-center py-20 text-gray-400">
+            <Users className="w-10 h-10 mx-auto mb-3 opacity-20"/>
+            <p className="font-semibold">No drivers registered yet</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
+// ─── PANEL: Trucks ────────────────────────────────────────────────────────────
 function TrucksPanel({ trucks, loading }: { trucks:TruckType[]; loading:boolean }) {
   const TS = {
     available:   { label:"Available",   color:"#166534", bg:"#F0FDF4", bar:"#22C55E" },
@@ -369,7 +573,9 @@ function TrucksPanel({ trucks, loading }: { trucks:TruckType[]; loading:boolean 
                 <p className="font-black text-gray-900 text-lg tracking-tight">{t.plate}</p>
                 <p className="text-xs text-gray-400 mt-0.5">{t.model}</p>
               </div>
-              <span className="px-2.5 py-1 rounded-full text-xs font-bold" style={{ color:ts.color, backgroundColor:ts.bg }}>{ts.label}</span>
+              <span className="px-2.5 py-1 rounded-full text-xs font-bold" style={{ color:ts.color, backgroundColor:ts.bg }}>
+                {t.status==="on_route" && <span className="mr-1">●</span>}{ts.label}
+              </span>
             </div>
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs font-medium">
@@ -382,7 +588,7 @@ function TrucksPanel({ trucks, loading }: { trucks:TruckType[]; loading:boolean 
               <p className="text-[11px] text-gray-400 text-right font-medium">{loadPct}% full</p>
             </div>
             <div className="space-y-1.5 pt-1">
-              {t.driverName && <div className="flex items-center gap-2 text-xs text-gray-600 font-medium"><Users className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"/>{t.driverName}</div>}
+              {t.driverName   && <div className="flex items-center gap-2 text-xs text-gray-600 font-medium"><Users className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"/>{t.driverName}</div>}
               {t.lastLocation && <div className="flex items-center gap-2 text-xs text-gray-600 font-medium"><MapPin className="w-3.5 h-3.5 text-gray-400 flex-shrink-0"/>{t.lastLocation}</div>}
             </div>
           </div>
@@ -398,33 +604,50 @@ function TrucksPanel({ trucks, loading }: { trucks:TruckType[]; loading:boolean 
   );
 }
 
+// ─── PANEL: Activity ──────────────────────────────────────────────────────────
 function ActivityPanel({ activity, loading }: { activity:any[]; loading:boolean }) {
-  const meta=(type:string)=>{
-    if(type==="field_issue")          return { Icon:AlertTriangle, color:"#EF4444", bg:"#FEF2F2" };
-    if(type==="collection_completed") return { Icon:CheckCircle2,  color:"#10B981", bg:"#F0FDF9" };
-    if(type==="assigned")             return { Icon:UserCheck,     color:"#3B82F6", bg:"#EFF6FF" };
-    return                                   { Icon:Activity,      color:"#6366F1", bg:"#EEF2FF" };
+  const meta = (type: string) => {
+    switch(type) {
+      case "field_issue":          return { Icon:AlertTriangle, color:"#EF4444", bg:"#FEF2F2", label:"Issue" };
+      case "collection_completed": return { Icon:CheckCircle2,  color:"#10B981", bg:"#F0FDF9", label:"Done" };
+      case "assigned":             return { Icon:UserCheck,     color:"#3B82F6", bg:"#EFF6FF", label:"Assigned" };
+      // ── NEW: status_change events from the activity API ──────────────────
+      case "status_change":        return { Icon:Navigation,    color:"#8B5CF6", bg:"#F5F3FF", label:"Status" };
+      default:                     return { Icon:Activity,      color:"#6366F1", bg:"#EEF2FF", label:"Event" };
+    }
   };
+
   if (loading) return <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-green-600"/></div>;
+
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-      <div className="px-4 lg:px-6 py-4 border-b border-gray-100">
+      <div className="px-4 lg:px-6 py-4 border-b border-gray-100 flex items-center gap-3">
         <h3 className="font-bold text-gray-900 text-sm">Live Activity Feed</h3>
-        <p className="text-xs text-gray-400 mt-0.5">All system events in real time</p>
+        <LiveDot />
+        <p className="text-xs text-gray-400 ml-auto">All system events</p>
       </div>
       <div className="divide-y divide-gray-50 max-h-[60vh] overflow-y-auto">
         {activity.length===0 ? (
-          <div className="text-center py-20 text-gray-400"><Activity className="w-10 h-10 mx-auto mb-3 opacity-20"/><p className="font-semibold">No activity yet</p></div>
-        ) : activity.map((a,i)=>{
-          const {Icon,color,bg}=meta(a.type);
+          <div className="text-center py-20 text-gray-400">
+            <Activity className="w-10 h-10 mx-auto mb-3 opacity-20"/>
+            <p className="font-semibold">No activity yet</p>
+          </div>
+        ) : activity.map((a,i) => {
+          const { Icon, color, bg, label } = meta(a.type);
+          const isIssue = a.type === "field_issue";
           return (
-            <div key={a._id??i} className="flex gap-4 px-4 lg:px-6 py-4 hover:bg-gray-50/60 transition-colors">
-              <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ backgroundColor:bg }}><Icon className="w-4 h-4" style={{ color }}/></div>
+            <div key={a._id??i} className={`flex gap-4 px-4 lg:px-6 py-4 hover:bg-gray-50/60 transition-colors ${isIssue?"bg-red-50/30":""}`}>
+              <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ backgroundColor:bg }}>
+                <Icon className="w-4 h-4" style={{ color }}/>
+              </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm text-gray-800 font-medium">{a.message}</p>
+                <p className="text-sm text-gray-800 font-medium leading-snug">{a.message}</p>
                 <p className="text-xs text-gray-400 mt-0.5">{new Date(a.createdAt).toLocaleString("en-ZA",{dateStyle:"short",timeStyle:"short"})}</p>
               </div>
-              {a.type==="field_issue" && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full font-bold self-start flex-shrink-0">Issue</span>}
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-full self-start flex-shrink-0 mt-0.5"
+                style={{ color, backgroundColor:bg }}>
+                {label}
+              </span>
             </div>
           );
         })}
@@ -433,22 +656,26 @@ function ActivityPanel({ activity, loading }: { activity:any[]; loading:boolean 
   );
 }
 
+// ─── PANEL: Reports ───────────────────────────────────────────────────────────
 function ReportsPanel({ stats, requests }: { stats:Stats; requests:Request[] }) {
-  const COLORS=["#10B981","#3B82F6","#F59E0B","#EF4444"];
-  const wasteBreakdown=["general","organic","recycling","hazardous"].map((type,i)=>({
+  const COLORS = ["#10B981","#3B82F6","#F59E0B","#EF4444"];
+  const wasteBreakdown = ["general","organic","recycling","hazardous"].map((type,i) => ({
     type, color:COLORS[i],
-    count:requests.filter(r=>r.wasteType===type).length,
-    pct:requests.length>0?Math.round(requests.filter(r=>r.wasteType===type).length/requests.length*100):0,
+    count: requests.filter(r=>r.wasteType===type).length,
+    pct:   requests.length>0 ? Math.round(requests.filter(r=>r.wasteType===type).length/requests.length*100) : 0,
   }));
-  const statusBreakdown=Object.keys(STATUS_META).map(status=>({status,count:requests.filter(r=>r.status===status).length})).filter(s=>s.count>0);
+  const statusBreakdown = Object.keys(STATUS_META).map(status => ({
+    status, count: requests.filter(r=>r.status===status).length,
+  })).filter(s=>s.count>0);
 
-  const handleExport=async()=>{
+  const handleExport = async () => {
     try {
-      const res=await fetch("/api/admin/reports/export");
+      const res = await fetch("/api/admin/reports/export");
       if(!res.ok) throw new Error();
-      const blob=await res.blob();
-      const url=URL.createObjectURL(blob);
-      const a=document.createElement("a"); a.href=url; a.download=`greenkidsa-${new Date().toISOString().split("T")[0]}.csv`; a.click();
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href = url; a.download = `greenkidsa-${new Date().toISOString().split("T")[0]}.csv`; a.click();
       URL.revokeObjectURL(url);
     } catch { alert("Export failed."); }
   };
@@ -456,7 +683,10 @@ function ReportsPanel({ stats, requests }: { stats:Stats; requests:Request[] }) 
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h3 className="font-bold text-gray-900">Reports & Analytics</h3><p className="text-xs text-gray-400 mt-0.5">Based on all-time data</p></div>
+        <div>
+          <h3 className="font-bold text-gray-900">Reports & Analytics</h3>
+          <p className="text-xs text-gray-400 mt-0.5">Based on all-time data</p>
+        </div>
         <button onClick={handleExport} className="flex items-center gap-2 px-4 py-2.5 bg-green-600 hover:bg-green-700 text-white text-sm font-bold rounded-xl transition-colors shadow-sm">
           <Download className="w-4 h-4"/> Export CSV
         </button>
@@ -465,15 +695,19 @@ function ReportsPanel({ stats, requests }: { stats:Stats; requests:Request[] }) 
         <div className="bg-white rounded-2xl border border-gray-100 p-5 lg:p-6 shadow-sm">
           <h4 className="font-bold text-gray-800 text-sm mb-5">Waste Type Distribution</h4>
           <div className="space-y-4">
-            {wasteBreakdown.map(({type,count,pct,color})=>{
-              const WIcon=WASTE_ICONS[type]??Package;
+            {wasteBreakdown.map(({type,count,pct,color}) => {
+              const WIcon = WASTE_ICONS[type] ?? Package;
               return (
                 <div key={type}>
                   <div className="flex items-center justify-between mb-1.5">
-                    <span className="flex items-center gap-2 text-sm font-semibold text-gray-700 capitalize"><WIcon className="w-4 h-4" style={{color}}/>{type}</span>
+                    <span className="flex items-center gap-2 text-sm font-semibold text-gray-700 capitalize">
+                      <WIcon className="w-4 h-4" style={{color}}/>{type}
+                    </span>
                     <span className="text-sm font-mono font-bold text-gray-900">{count} <span className="text-gray-400 font-normal text-xs">({pct}%)</span></span>
                   </div>
-                  <div className="w-full bg-gray-100 rounded-full h-2"><div className="h-2 rounded-full transition-all duration-700" style={{width:`${pct}%`,backgroundColor:color}}/></div>
+                  <div className="w-full bg-gray-100 rounded-full h-2">
+                    <div className="h-2 rounded-full transition-all duration-700" style={{width:`${pct}%`,backgroundColor:color}}/>
+                  </div>
                 </div>
               );
             })}
@@ -482,13 +716,15 @@ function ReportsPanel({ stats, requests }: { stats:Stats; requests:Request[] }) 
         <div className="bg-white rounded-2xl border border-gray-100 p-5 lg:p-6 shadow-sm">
           <h4 className="font-bold text-gray-800 text-sm mb-5">Status Distribution</h4>
           <div className="space-y-3">
-            {statusBreakdown.map(({status,count})=>{
-              const m=STATUS_META[status];
-              const pct=requests.length>0?Math.round(count/requests.length*100):0;
+            {statusBreakdown.map(({status,count}) => {
+              const m   = STATUS_META[status];
+              const pct = requests.length>0 ? Math.round(count/requests.length*100) : 0;
               return (
                 <div key={status} className="flex items-center gap-3">
                   <StatusBadge status={status}/>
-                  <div className="flex-1 bg-gray-100 rounded-full h-2"><div className="h-2 rounded-full" style={{width:`${pct}%`,backgroundColor:m?.dot??"#6B7280"}}/></div>
+                  <div className="flex-1 bg-gray-100 rounded-full h-2">
+                    <div className="h-2 rounded-full" style={{width:`${pct}%`,backgroundColor:m?.dot??"#6B7280"}}/>
+                  </div>
                   <span className="text-sm font-mono font-black text-gray-700 w-7 text-right">{count}</span>
                 </div>
               );
@@ -499,7 +735,12 @@ function ReportsPanel({ stats, requests }: { stats:Stats; requests:Request[] }) 
         <div className="bg-white rounded-2xl border border-gray-100 p-5 lg:p-6 shadow-sm lg:col-span-2">
           <h4 className="font-bold text-gray-800 text-sm mb-5">All-Time Summary</h4>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 lg:gap-4">
-            {[{label:"Total Requests",value:stats.totalRequests,color:"#6366F1"},{label:"Completed",value:stats.completedToday,color:"#10B981"},{label:"Total Drivers",value:stats.totalDrivers,color:"#F59E0B"},{label:"Open Issues",value:stats.openIssues,color:"#EF4444"}].map(({label,value,color})=>(
+            {[
+              {label:"Total Requests", value:stats.totalRequests,  color:"#6366F1"},
+              {label:"Completed",      value:stats.completedToday, color:"#10B981"},
+              {label:"Total Drivers",  value:stats.totalDrivers,   color:"#F59E0B"},
+              {label:"Open Issues",    value:stats.openIssues,     color:"#EF4444"},
+            ].map(({label,value,color}) => (
               <div key={label} className="rounded-xl p-4 text-center border border-gray-100" style={{backgroundColor:color+"08"}}>
                 <p className="text-2xl lg:text-3xl font-black font-mono" style={{color}}>{value}</p>
                 <p className="text-xs text-gray-500 mt-1 font-medium">{label}</p>
@@ -512,44 +753,72 @@ function ReportsPanel({ stats, requests }: { stats:Stats; requests:Request[] }) 
   );
 }
 
+// ─── MAIN PAGE ────────────────────────────────────────────────────────────────
 export default function AdminPage() {
   const { user, loading:authLoading } = useAuth();
   const router = useRouter();
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab]   = useState("overview");
   const [dataLoading, setDataLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(new Date());
-  const [requests, setRequests] = useState<Request[]>([]);
-  const [drivers, setDrivers] = useState<Driver[]>([]);
-  const [trucks, setTrucks] = useState<TruckType[]>([]);
-  const [activity, setActivity] = useState<any[]>([]);
-  const [stats, setStats] = useState<Stats>({totalRequests:0,pendingRequests:0,assignedRequests:0,completedToday:0,totalDrivers:0,activeDrivers:0,totalTrucks:0,trucksOnRoute:0,kgCollectedToday:0,openIssues:0,requestsTrend:0,completionRate:0});
+  const [requests, setRequests]     = useState<Request[]>([]);
+  const [drivers, setDrivers]       = useState<Driver[]>([]);
+  const [trucks, setTrucks]         = useState<TruckType[]>([]);
+  const [activity, setActivity]     = useState<any[]>([]);
+  const [stats, setStats]           = useState<Stats>({
+    totalRequests:0, pendingRequests:0, assignedRequests:0, completedToday:0,
+    totalDrivers:0, activeDrivers:0, totalTrucks:0, trucksOnRoute:0,
+    kgCollectedToday:0, openIssues:0, requestsTrend:0, completionRate:0,
+  });
 
   const isAdmin = (user as any)?.role==="admin"||(user as any)?.role==="dispatcher";
 
-  useEffect(()=>{ if(!authLoading&&!user) router.push("/"); if(!authLoading&&user&&!isAdmin) router.push("/"); },[user,authLoading,isAdmin,router]);
+  useEffect(() => {
+    if (!authLoading && !user)    router.push("/");
+    if (!authLoading && user && !isAdmin) router.push("/");
+  }, [user, authLoading, isAdmin, router]);
 
-  const fetchAll = useCallback(async()=>{
+  const fetchAll = useCallback(async () => {
     setDataLoading(true);
     try {
-      const [r1,r2,r3,r4,r5]=await Promise.all([fetch("/api/admin/requests"),fetch("/api/admin/drivers"),fetch("/api/admin/trucks"),fetch("/api/admin/activity"),fetch("/api/admin/stats")]);
-      if(r1.ok) setRequests((await r1.json()).requests??[]);
-      if(r2.ok) setDrivers((await r2.json()).drivers??[]);
-      if(r3.ok) setTrucks((await r3.json()).trucks??[]);
-      if(r4.ok) setActivity((await r4.json()).activity??[]);
+      const [r1,r2,r3,r4,r5] = await Promise.all([
+        fetch("/api/admin/requests"),
+        fetch("/api/admin/drivers"),
+        fetch("/api/admin/trucks"),
+        fetch("/api/admin/activity"),
+        fetch("/api/admin/stats"),
+      ]);
+      if(r1.ok) setRequests((await r1.json()).requests ?? []);
+      if(r2.ok) setDrivers((await r2.json()).drivers   ?? []);
+      if(r3.ok) setTrucks((await r3.json()).trucks     ?? []);
+      if(r4.ok) setActivity((await r4.json()).activity ?? []);
       if(r5.ok) setStats(await r5.json());
       setLastRefresh(new Date());
-    } catch(e){console.error(e);}
-    finally{setDataLoading(false);}
-  },[]);
+    } catch(e) { console.error(e); }
+    finally { setDataLoading(false); }
+  }, []);
 
-  useEffect(()=>{ if(isAdmin){fetchAll(); const i=setInterval(fetchAll,30000); return()=>clearInterval(i);} },[isAdmin,fetchAll]);
+  useEffect(() => {
+    if (isAdmin) {
+      fetchAll();
+      const i = setInterval(fetchAll, 30_000);
+      return () => clearInterval(i);
+    }
+  }, [isAdmin, fetchAll]);
 
-  const handleAssign=async(requestId:string,driverId:string,driverName:string)=>{
-    const res=await fetch("/api/admin/assign",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({requestId,driverId,driverName})});
+  const handleAssign = async (requestId:string, driverId:string, driverName:string) => {
+    const res = await fetch("/api/admin/assign", {
+      method:"PATCH",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({requestId,driverId,driverName}),
+    });
     if(res.ok) setRequests(prev=>prev.map(r=>r._id===requestId?{...r,status:"assigned",collectorName:driverName}:r));
   };
 
-  if(authLoading||(!user&&!authLoading)) return <div className="flex items-center justify-center min-h-screen"><Loader2 className="w-8 h-8 animate-spin text-green-600"/></div>;
+  // Count live jobs for nav badge
+  const liveJobCount = requests.filter(r=>r.status==="en_route"||r.status==="collecting").length;
+
+  if (authLoading||(!user&&!authLoading))
+    return <div className="flex items-center justify-center min-h-screen"><Loader2 className="w-8 h-8 animate-spin text-green-600"/></div>;
 
   return (
     <div className="min-h-screen bg-gray-50/80 mt-20">
@@ -562,9 +831,15 @@ export default function AdminPage() {
                 <Shield className="w-4 h-4 text-white"/>
               </div>
               <span className="font-black text-gray-900 text-sm hidden sm:block">Admin Dashboard</span>
-              {stats.openIssues>0 && (
+              {stats.openIssues > 0 && (
                 <span className="bg-red-100 text-red-600 text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1">
                   <AlertTriangle className="w-3 h-3"/>{stats.openIssues}
+                </span>
+              )}
+              {liveJobCount > 0 && (
+                <span className="bg-purple-100 text-purple-700 text-xs font-bold px-2 py-0.5 rounded-full flex items-center gap-1.5">
+                  <LiveDot color="#8B5CF6"/>
+                  {liveJobCount} live
                 </span>
               )}
             </div>
@@ -578,24 +853,29 @@ export default function AdminPage() {
               </button>
             </div>
           </div>
-          {/* Tab nav — scrollable on mobile */}
+
+          {/* Tab nav */}
           <div className="flex -mb-px overflow-x-auto">
-            {NAV_ITEMS.map(({id,label,Icon})=>(
+            {NAV_ITEMS.map(({id,label,Icon}) => (
               <button key={id} onClick={()=>setActiveTab(id)}
                 className={`flex items-center gap-1.5 lg:gap-2 px-3 lg:px-4 py-3 text-xs font-bold border-b-2 whitespace-nowrap transition-all flex-shrink-0 ${
-                  activeTab===id?"border-green-600 text-green-700 bg-green-50/50":"border-transparent text-gray-400 hover:text-gray-700 hover:bg-gray-50/50"
+                  activeTab===id ? "border-green-600 text-green-700 bg-green-50/50":"border-transparent text-gray-400 hover:text-gray-700 hover:bg-gray-50/50"
                 }`}>
                 <Icon className="w-3.5 h-3.5"/>
                 <span className="hidden sm:inline">{label}</span>
                 <span className="sm:hidden">{label.slice(0,3)}</span>
-                {id==="requests"&&stats.pendingRequests>0 && (
+                {id==="requests" && stats.pendingRequests > 0 && (
                   <span className="bg-amber-100 text-amber-700 text-[10px] font-black px-1.5 py-0.5 rounded-full">{stats.pendingRequests}</span>
+                )}
+                {id==="drivers" && liveJobCount > 0 && (
+                  <span className="bg-purple-100 text-purple-700 text-[10px] font-black px-1.5 py-0.5 rounded-full">{liveJobCount}</span>
                 )}
               </button>
             ))}
           </div>
         </div>
       </div>
+
       {/* Page content */}
       <div className="max-w-screen-2xl mx-auto px-3 sm:px-6 lg:px-8 py-4 lg:py-6">
         {activeTab==="overview" && <OverviewPanel stats={stats} requests={requests} loading={dataLoading}/>}

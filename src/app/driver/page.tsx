@@ -10,6 +10,7 @@ import {
   TrendingUp, Trophy, ArrowRight, Loader2, Upload,
   Truck, Briefcase, BarChart2,
 } from "lucide-react";
+import { useDriverJobs } from "@/hooks/useDriverJobs";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Job {
@@ -36,7 +37,7 @@ const WASTE_META: Record<string, { label:string; color:string; bg:string; Icon:a
 
 const URGENCY_DOT: Record<string, string> = { high:"#EF4444", normal:"#F59E0B", low:"#22C55E" };
 
-const CHECKLIST_ITEMS = [
+export const CHECKLIST_ITEMS = [
   "Verify address matches job card",
   "PPE gear fitted correctly",
   "Check waste type labels on bins",
@@ -81,6 +82,24 @@ function TabBar({ tab, setTab, hasActiveJob }: { tab:string; setTab:(t:string)=>
           )}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ─── Resume Banner ─────────────────────────────────────────────────────────────
+function ResumeBanner({ job, onDismiss }: { job: Job; onDismiss: () => void }) {
+  return (
+    <div className="mx-4 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-center gap-3 shadow-sm">
+      <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+        <RotateCcw className="w-4 h-4 text-amber-600"/>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-black text-amber-900">Trip resumed</p>
+        <p className="text-xs text-amber-700 truncate">{job.address}</p>
+      </div>
+      <button onClick={onDismiss} className="text-amber-500 hover:text-amber-700 flex-shrink-0">
+        <X className="w-4 h-4"/>
+      </button>
     </div>
   );
 }
@@ -208,6 +227,18 @@ function TripPanel({ job, elapsed, checks, onToggleCheck, onArrived, onReportIss
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Status pill — shows current DB status */}
+      <div className="flex items-center gap-2">
+        <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black tracking-wide
+          ${job.status === "collecting"
+            ? "bg-blue-100 text-blue-700"
+            : "bg-amber-100 text-amber-700"
+          }`}>
+          <span className="w-1.5 h-1.5 rounded-full bg-current inline-block"/>
+          {job.status === "collecting" ? "AT LOCATION — COLLECTING" : "EN ROUTE"}
+        </span>
       </div>
 
       {/* Maps link */}
@@ -472,73 +503,72 @@ export default function DriverPage() {
   const { user, loading:authLoading } = useAuth();
   const router = useRouter();
 
-  const [tab, setTab] = useState("jobs");
-  const [jobs, setJobs] = useState<Job[]>([]);
-  const [jobsLoading, setJobsLoading] = useState(true);
-  const [activeJob, setActiveJob] = useState<Job|null>(null);
-  const [elapsed, setElapsed] = useState(0);
-  const [checks, setChecks] = useState<boolean[]>(CHECKLIST_ITEMS.map(()=>false));
-  const [showComplete, setShowComplete] = useState(false);
-  const [summary, setSummary] = useState<DaySummary>({ completed:0, total:0, kgCollected:0, points:0, onTimeRate:94 });
-  const timerRef = useRef<NodeJS.Timeout|null>(null);
+  const {
+    jobs, summary, loading: jobsLoading,
+    activeJob, checks, elapsed, restoredTab,
+    startTrip, markArrived, completeJob, reportIssue, toggleCheck, saveTab,
+  } = useDriverJobs();
 
+  const [tab, setTab] = useState("jobs");
+  const [showComplete, setShowComplete] = useState(false);
+  const [showResumeBanner, setShowResumeBanner] = useState(false);
+
+  // Redirect if not authenticated
   useEffect(()=>{ if(!authLoading&&!user) router.push("/"); },[user,authLoading,router]);
 
-  useEffect(()=>{
-    if(!user) return;
-    (async()=>{
-      setJobsLoading(true);
-      try{const res=await fetch("/api/driver/jobs"); if(res.ok){const d=await res.json();setJobs(d.jobs||[]);setSummary(s=>({...s,total:(d.jobs||[]).length}));}}
-      catch(e){console.error(e);}
-      finally{setJobsLoading(false);}
-    })();
-  },[user]);
+  // Once the hook has resolved a restored tab, apply it once only
+  useEffect(() => {
+    if (restoredTab) {
+      setTab(restoredTab);
+      setShowResumeBanner(true);
+      // Auto-hide banner after 4 s
+      const t = setTimeout(() => setShowResumeBanner(false), 4000);
+      return () => clearTimeout(t);
+    }
+  }, [restoredTab]);
 
-  const startTimer=useCallback(()=>{if(timerRef.current)clearInterval(timerRef.current);setElapsed(0);timerRef.current=setInterval(()=>setElapsed(s=>s+1),1000);},[]);
-  const stopTimer=useCallback(()=>{if(timerRef.current)clearInterval(timerRef.current);},[]);
+  // Keep tab saved to localStorage whenever it changes
+  const handleSetTab = (t: string) => { setTab(t); saveTab(t); };
 
-  const handleStartTrip=(job:Job)=>{
-    setActiveJob(job);setChecks(CHECKLIST_ITEMS.map(()=>false));startTimer();
-    fetch(`/api/driver/jobs/${job._id}/status`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:"en_route"})}).catch(console.error);
-    setTab("trip");
+  const handleStartTrip = async (job: Job) => {
+    await startTrip(job);
+    handleSetTab("trip");
   };
 
-  const handleArrived=()=>{
-    if(!activeJob) return;
-    fetch(`/api/driver/jobs/${activeJob._id}/status`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({status:"collecting"})}).catch(console.error);
-    setTab("proof");
+  const handleArrived = async () => {
+    if (!activeJob) return;
+    await markArrived(activeJob._id);
+    handleSetTab("proof");
   };
 
-  const handleComplete=async(data:{weight:number;notes:string;imageUrls:string[]})=>{
-    if(!activeJob) return;
-    await fetch(`/api/driver/jobs/${activeJob._id}/complete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});
-    stopTimer();setShowComplete(true);
+  const handleComplete = async (data: {weight:number;notes:string;imageUrls:string[]}) => {
+    if (!activeJob) return;
+    await completeJob(activeJob._id, data);
+    setShowComplete(true);
   };
 
-  const handleDone=()=>{
-    setShowComplete(false);setJobs(prev=>prev.filter(j=>j._id!==activeJob?._id));
-    setSummary(s=>({...s,completed:s.completed+1,points:s.points+10}));
-    setActiveJob(null);stopTimer();setTab("jobs");
+  const handleDone = () => {
+    setShowComplete(false);
+    handleSetTab("jobs");
   };
 
-  const handleReportIssue=async()=>{
-    if(!activeJob) return;
-    const issue=prompt("Briefly describe the issue:");
-    if(!issue) return;
-    await fetch(`/api/driver/jobs/${activeJob._id}/issue`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({issue})});
+  const handleReportIssue = async () => {
+    if (!activeJob) return;
+    const issue = prompt("Briefly describe the issue:");
+    if (!issue) return;
+    await reportIssue(activeJob._id, issue);
     alert("Issue reported to dispatcher.");
   };
 
   if(authLoading) return <div className="flex items-center justify-center min-h-screen"><Loader2 className="w-8 h-8 animate-spin text-green-600"/></div>;
   if(!user) return null;
 
-  const parts=user.name.trim().split(/\s+/);
-  const initials=parts.length>=2?(parts[0][0]+parts[parts.length-1][0]).toUpperCase():parts[0].slice(0,2).toUpperCase();
+  const parts = user.name.trim().split(/\s+/);
+  const initials = parts.length>=2?(parts[0][0]+parts[parts.length-1][0]).toUpperCase():parts[0].slice(0,2).toUpperCase();
   const completionPct = summary.total > 0 ? Math.round(summary.completed/summary.total*100) : 0;
 
   return (
-    // Full screen on all devices — centered card on large screens
-    <div className="min-h-screen bg-gray-50 flex items-start justify-center lg:items-center lg:py-8 px-0 lg:px-4">
+    <div className="min-h-screen bg-gray-50 flex items-start justify-center lg:items-center lg:py-8 px-0 lg:px-4 mt-20">
       <div className="w-full lg:max-w-2xl xl:max-w-3xl relative">
         <div className="bg-white shadow-xl lg:rounded-3xl lg:border lg:border-gray-200 overflow-hidden relative min-h-screen lg:min-h-0">
           {showComplete && <CompletionOverlay onDone={handleDone}/>}
@@ -580,14 +610,19 @@ export default function DriverPage() {
             </div>
           </div>
 
-          <TabBar tab={tab} setTab={setTab} hasActiveJob={!!activeJob}/>
+          <TabBar tab={tab} setTab={handleSetTab} hasActiveJob={!!activeJob}/>
+
+          {/* Resume banner — shown briefly after a session restore */}
+          {showResumeBanner && activeJob && (
+            <ResumeBanner job={activeJob as any} onDismiss={()=>setShowResumeBanner(false)}/>
+          )}
 
           {/* Panels */}
           <div className="overflow-y-auto" style={{ maxHeight:"calc(100vh - 200px)" }}>
-            {tab==="jobs"  && <JobsPanel  jobs={jobs}   loading={jobsLoading} activeJobId={activeJob?._id??null} onStart={handleStartTrip}/>}
-            {tab==="trip"  && <TripPanel  job={activeJob} elapsed={elapsed} checks={checks} onToggleCheck={i=>setChecks(prev=>prev.map((v,idx)=>idx===i?!v:v))} onArrived={handleArrived} onReportIssue={handleReportIssue}/>}
-            {tab==="proof" && <ProofPanel job={activeJob} onComplete={handleComplete}/>}
-            {tab==="day"   && <DayPanel   summary={summary} jobs={jobs}/>}
+            {tab==="jobs"  && <JobsPanel  jobs={jobs as any[]}   loading={jobsLoading} activeJobId={activeJob?._id??null} onStart={handleStartTrip}/>}
+            {tab==="trip"  && <TripPanel  job={activeJob as any} elapsed={elapsed} checks={checks} onToggleCheck={toggleCheck} onArrived={handleArrived} onReportIssue={handleReportIssue}/>}
+            {tab==="proof" && <ProofPanel job={activeJob as any} onComplete={handleComplete}/>}
+            {tab==="day"   && <DayPanel   summary={summary as any} jobs={jobs as any[]}/>}
           </div>
         </div>
       </div>

@@ -36,7 +36,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="p-8 max-w-2xl mx-auto">
+    <div className="p-8 max-w-2xl mx-auto mt-20">
       <h1 className="text-3xl font-semibold mb-6 text-gray-800">Account Settings</h1>
       
       <form onSubmit={handleSubmit} className="space-y-6">
