@@ -139,7 +139,7 @@ export default function Home() {
                   <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-300" />
                 </button>
               ) : (
-                <Link href="/report">
+                <Link href="/request-collection">
                   <button className="group inline-flex items-center justify-center gap-3 bg-white text-green-900 px-8 py-4 rounded-full text-sm tracking-wide font-semibold transition-all duration-300 hover:bg-green-50 shadow-2xl shadow-black/20">
                     Report Waste
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform duration-300" />
