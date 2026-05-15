@@ -194,9 +194,6 @@ export default function Header({ onMenuClick, totalEarnings }: HeaderProps) {
                       <p className="text-xs text-gray-400 truncate">{user.email}</p>
                     </div>
                     <DropdownMenuItem asChild>
-                      <Link href="/settings" className="cursor-pointer text-sm">Profile</Link>
-                    </DropdownMenuItem>
-                    <DropdownMenuItem asChild>
                       <Link href="/settings" className="cursor-pointer text-sm">Settings</Link>
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
