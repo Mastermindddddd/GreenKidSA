@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { Poppins } from 'next/font/google'
+import Image from "next/image"
 
 const poppins = Poppins({
   weight: ['300', '400', '600', '700'],
@@ -307,7 +308,13 @@ export default function AboutPage() {
       {/* ── CTA ── */}
       <section className="bg-green-900 py-20">
         <div className="max-w-3xl mx-auto px-6 text-center">
-          <Leaf className="w-10 h-10 text-green-400 mx-auto mb-6" />
+          <Image
+              src="/logo.png"
+              alt="GreenKidSA Logo"
+              width={72}
+              height={72}
+              className="sm:block object-contain shrink-0 mx-auto mb-6"
+          />
           <h2 className="text-3xl md:text-4xl font-semibold text-white mb-5">
             Join the GreenKidSA Movement
           </h2>

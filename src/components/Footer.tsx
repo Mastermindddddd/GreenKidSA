@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { Poppins } from 'next/font/google'
+import Image from "next/image"
 
 const poppins = Poppins({ weight: ['300', '400', '600'], subsets: ['latin'], display: 'swap' })
 
@@ -22,8 +23,8 @@ const NAV = [
   {
     heading: 'Company',
     links: [
-      { label: 'About GreenKidSA', href: '#about' },
-      { label: 'Service Areas', href: '#areas' },
+      { label: 'About GreenKidSA', href: '/about' },
+      { label: 'Services', href: '/services' },
       { label: 'Updates', href: '#updates' },
       { label: 'Contact', href: 'mailto:info@greenkidsa.co.za' },
     ],
@@ -51,9 +52,15 @@ export default function Footer() {
       {/* Top bar */}
       <div className="border-b border-white/10">
         <div className="max-w-6xl mx-auto px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center">
-              <Leaf className="w-4 h-4 text-white" />
+          <div className="flex items-center">
+            <div className="flex items-center justify-center">
+              <Image
+                  src="/logo.png"
+                  alt="GreenKidSA Logo"
+                  width={72}
+                  height={72}
+                  className="sm:block object-contain shrink-0"
+                />
             </div>
             <span className="font-semibold text-lg tracking-tight">
               Green<span className="text-green-400">KidSA</span>

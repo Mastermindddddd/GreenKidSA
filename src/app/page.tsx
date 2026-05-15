@@ -11,6 +11,7 @@ import { useAuth } from '@/context/AuthContext'
 import AuthModal from '@/components/AuthModal'
 import { Poppins } from 'next/font/google'
 import Link from 'next/link'
+import Image from "next/image"
 
 const poppins = Poppins({
   weight: ['300', '400', '600', '700'],
@@ -149,7 +150,13 @@ export default function Home() {
           <div className="relative rounded-3xl overflow-hidden bg-gradient-to-br from-green-800 to-emerald-900 p-10 flex flex-col justify-between min-h-[320px]">
             <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(circle at 70% 30%, #4ade80 0%, transparent 60%), radial-gradient(circle at 20% 80%, #14b8a6 0%, transparent 50%)' }} />
             <div className="relative z-10">
-              <Leaf className="w-10 h-10 text-green-300 mb-6" />
+              <Image
+                src="/logo.png"
+                alt="GreenKidSA Logo"
+                width={72}
+                height={72}
+                className="sm:block object-contain shrink-0"
+              />
               <p className="text-2xl font-semibold text-white leading-snug mb-4">
                 "A cleaner South Africa starts with accountable communities."
               </p>
