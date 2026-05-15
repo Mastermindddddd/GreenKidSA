@@ -5,6 +5,7 @@ import { Inter } from 'next/font/google'
 import "./globals.css"
 import Header from "@/components/Header"
 import Sidebar from "@/components/Sidebar"
+import Footer from "@/components/Footer"
 // @ts-ignore
 import 'leaflet/dist/leaflet.css'
 import { Toaster } from 'react-hot-toast'
@@ -31,6 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <main className="flex-1">
               {children}
             </main>
+            <Footer />
           </div>
           <Toaster />
         </AuthProvider>
