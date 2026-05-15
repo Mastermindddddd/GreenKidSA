@@ -13,6 +13,8 @@ const PUBLIC_ITEMS = [
   { href: "/rewards",            icon: Coins,      label: "Rewards" },
   { href: "/leaderboard",        icon: Medal,      label: "Leaderboard" },
   { href: "/my-requests", icon: ClipboardList, label: "My Requests" },
+  { href: "/about",              icon: Leaf,       label: "About Us" },
+  { href: "/services",           icon: Settings,   label: "Services" },
 ]
 
 const DRIVER_ITEMS = [
