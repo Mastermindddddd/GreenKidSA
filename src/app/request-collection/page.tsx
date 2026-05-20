@@ -1,5 +1,5 @@
 'use client'
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useAuth } from '@/context/AuthContext'
 import { useRouter } from 'next/navigation'
 import {
@@ -21,16 +21,23 @@ interface UploadedImage {
   error?: string
 }
 
+interface MapboxFeature {
+  id: string
+  place_name: string
+  text: string
+  context?: { id: string; text: string }[]
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 const WASTE_TYPES: { value: WasteType; label: string; icon: string; color: string }[] = [
-  { value: 'Household',        label: 'Household Waste',    icon: '🗑️',  color: '#6b7280' },
-  { value: 'Recyclable',     label: 'Recyclable',       icon: '♻️',  color: '#16a34a' },
-  { value: 'Waste picker',        label: 'Waste Picker',   icon: '🌿',  color: '#65a30d' },
-  { value: 'School',      label: 'School Waste',        icon: '⚠️',  color: '#dc2626' },
-  { value: 'Electronic',     label: 'E-Waste',          icon: '💻',  color: '#7c3aed' },
-  { value: 'Company', label: 'Company Waste', icon: '🛋️',  color: '#92400e' },
-  { value: 'Food/Garden',         label: 'Food/Garden Waste',     icon: '🌳',  color: '#15803d' },
-  { value: 'Medical/Hazardous',        label: 'Medical/Hazardous Waste',    icon: '🏥',  color: '#0891b2' },
+  { value: 'Household',        label: 'Household Waste',         icon: '🗑️',  color: '#6b7280' },
+  { value: 'Recyclable',       label: 'Recyclable',              icon: '♻️',  color: '#16a34a' },
+  { value: 'Waste picker',     label: 'Waste Picker',            icon: '🦺',  color: '#65a30d' },
+  { value: 'School',           label: 'School Waste',            icon: '🎒',  color: '#dc2626' },
+  { value: 'Electronic',       label: 'E-Waste',                 icon: '💻',  color: '#7c3aed' },
+  { value: 'Company',          label: 'Company Waste',           icon: '🏭',  color: '#92400e' },
+  { value: 'Food/Garden',      label: 'Food/Garden Waste',       icon: '🍂',  color: '#15803d' },
+  { value: 'Medical/Hazardous',label: 'Medical/Hazardous Waste', icon: '☣️',  color: '#0891b2' },
 ]
 
 const URGENCY_OPTIONS: { value: Urgency; label: string; desc: string; color: string }[] = [
@@ -59,6 +66,133 @@ async function uploadToS3(file: File): Promise<string> {
   if (!uploadRes.ok) throw new Error('Failed to upload to S3')
 
   return publicUrl
+}
+
+function AddressAutocomplete({
+  value,
+  onChange,
+  onSelect,
+  placeholder,
+}: {
+  value: string
+  onChange: (val: string) => void
+  onSelect: (feature: MapboxFeature) => void
+  placeholder?: string
+}) {
+  const [suggestions, setSuggestions] = useState<MapboxFeature[]>([])
+  const [open, setOpen] = useState(false)
+  const [activeIdx, setActiveIdx] = useState(-1)
+  const [loading, setLoading] = useState(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const fetchSuggestions = useCallback((query: string) => {
+    clearTimeout(debounceRef.current)
+    if (query.length < 3) { setSuggestions([]); setOpen(false); return }
+
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true)
+      try {
+        const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
+        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json`
+          + `?access_token=${token}`
+          + `&country=ZA`           // restrict to South Africa
+          + `&types=address,place,locality,neighborhood`
+          + `&limit=5`
+          + `&language=en`
+        const res = await fetch(url)
+        const data = await res.json()
+        setSuggestions(data.features ?? [])
+        setOpen(true)
+        setActiveIdx(-1)
+      } catch {
+        setSuggestions([])
+      } finally {
+        setLoading(false)
+      }
+    }, 300)
+  }, [])
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    onChange(e.target.value)
+    fetchSuggestions(e.target.value)
+  }
+
+  const handleSelect = (feature: MapboxFeature) => {
+    onChange(feature.place_name)
+    onSelect(feature)
+    setSuggestions([])
+    setOpen(false)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!open) return
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, suggestions.length - 1)) }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, 0)) }
+    if (e.key === 'Enter' && activeIdx >= 0) { e.preventDefault(); handleSelect(suggestions[activeIdx]) }
+    if (e.key === 'Escape') { setOpen(false); setActiveIdx(-1) }
+  }
+
+  return (
+    <div ref={containerRef} className="relative">
+      <div className="relative">
+        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+        <input
+          type="text"
+          value={value}
+          onChange={handleChange}
+          onKeyDown={handleKeyDown}
+          onFocus={() => suggestions.length > 0 && setOpen(true)}
+          placeholder={placeholder ?? 'Start typing an address…'}
+          required
+          className="w-full pl-10 pr-10 py-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 text-sm text-gray-800 placeholder-gray-400"
+        />
+        {loading && (
+          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 animate-spin" />
+        )}
+      </div>
+
+      {/* Suggestions dropdown */}
+      {open && suggestions.length > 0 && (
+        <ul className="absolute z-50 mt-1 w-full bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+          {suggestions.map((feature, idx) => {
+            // Split place_name into primary (street) and secondary (city, country)
+            const [primary, ...rest] = feature.place_name.split(',')
+            const secondary = rest.join(',').trim()
+            return (
+              <li
+                key={feature.id}
+                onMouseDown={() => handleSelect(feature)}  // mousedown fires before blur
+                onMouseEnter={() => setActiveIdx(idx)}
+                className="flex items-start gap-3 px-4 py-3 cursor-pointer transition-colors text-sm"
+                style={{ background: activeIdx === idx ? '#f0fdf4' : 'white' }}
+              >
+                <MapPin className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-medium text-gray-800 truncate">{primary}</p>
+                  {secondary && <p className="text-xs text-gray-400 truncate">{secondary}</p>}
+                </div>
+              </li>
+            )
+          })}
+          <li className="px-4 py-2 text-[10px] text-gray-300 text-right border-t border-gray-50">
+            Powered by Mapbox
+          </li>
+        </ul>
+      )}
+    </div>
+  )
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
@@ -282,32 +416,40 @@ export default function RequestCollectionPage() {
         </Section>
 
         {/* ── Location ── */}
-        <Section title="Pickup Location" icon={<MapPin className="h-4 w-4" />}>
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Area / Suburb *</label>
-              <input
-                type="text"
-                value={location}
-                onChange={e => setLocation(e.target.value)}
-                placeholder="e.g. Hatfield, Pretoria"
-                required
-                className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 text-sm text-gray-800 placeholder-gray-400"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Full Street Address *</label>
-              <input
-                type="text"
-                value={address}
-                onChange={e => setAddress(e.target.value)}
-                placeholder="e.g. 12 Roper Street, Hatfield, 0083"
-                required
-                className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 text-sm text-gray-800 placeholder-gray-400"
-              />
-            </div>
-          </div>
-        </Section>
+<Section title="Pickup Location" icon={<MapPin className="h-4 w-4" />}>
+  <div className="space-y-3">
+    <div>
+      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+        Area / Suburb *
+      </label>
+      <input
+        type="text"
+        value={location}
+        onChange={e => setLocation(e.target.value)}
+        placeholder="e.g. Hatfield, Pretoria"
+        required
+        className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-white focus:outline-none focus:ring-2 focus:ring-green-500 text-sm text-gray-800 placeholder-gray-400"
+      />
+    </div>
+    <div>
+      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+        Full Street Address *
+      </label>
+      <AddressAutocomplete
+        value={address}
+        onChange={setAddress}
+        placeholder="e.g. 12 Roper Street, Hatfield, 0083"
+        onSelect={(feature) => {
+          // Auto-fill the suburb/area from the Mapbox context
+          const suburb =
+            feature.context?.find(c => c.id.startsWith('locality') || c.id.startsWith('neighborhood') || c.id.startsWith('place'))?.text
+            ?? ''
+          if (suburb) setLocation(suburb)
+        }}
+      />
+    </div>
+  </div>
+</Section>
 
         {/* ── Waste Details ── */}
         <Section title="Waste Details" icon={<Package className="h-4 w-4" />}>
@@ -492,7 +634,7 @@ export default function RequestCollectionPage() {
 // ─── Section wrapper ──────────────────────────────────────────────────────────
 function Section({ title, icon, children }: { title: string; icon: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-visible"> {/* changed overflow-hidden → overflow-visible */}
       <div className="flex items-center gap-2 px-5 py-4 border-b border-gray-50"
         style={{ background: 'linear-gradient(90deg, #f0fdf4, #ffffff)' }}>
         <span className="text-green-600">{icon}</span>
