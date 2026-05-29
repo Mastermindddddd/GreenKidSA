@@ -561,6 +561,61 @@ export default function Home() {
 
       <div className="section-divider max-w-6xl mx-auto px-6" />
 
+      {/* ── TEAM ── */}
+<section className="max-w-6xl mx-auto px-6 py-24">
+  <div className="grid md:grid-cols-2 gap-16 items-center">
+    <div>
+      <span className="inline-block text-xs uppercase tracking-[0.3em] text-green-600 mb-4 font-medium">Our People</span>
+      <h2 className="text-3xl md:text-4xl font-semibold text-green-900 leading-tight mb-6">
+        34 people, one mission
+      </h2>
+      <p className="text-green-800/70 leading-relaxed mb-5 font-light">
+        Behind every collection route and every community report is a dedicated GreenKidSA team member. Our 34-strong workforce spans field operations, community engagement, administration, and technology — all working from our Bloemfontein base.
+      </p>
+      <p className="text-green-800/70 leading-relaxed mb-8 font-light">
+        We invest in our people because they are our service. Every driver, coordinator, and platform engineer shares the same commitment to a cleaner, more accountable South Africa.
+      </p>
+      <div className="grid grid-cols-3 gap-4">
+        {[
+          { count: '30', label: 'Field operatives' },
+          { count: '2',  label: 'Admin & operations' },
+          { count: '2',  label: 'Tech & platform' },
+        ].map(({ count, label }) => (
+          <div key={label} className="bg-green-50 border border-green-100 rounded-2xl p-4 text-center">
+            <p className="text-3xl font-semibold text-green-900">{count}</p>
+            <p className="text-xs text-green-600 mt-1 leading-snug">{label}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    {/* Avatar grid panel */}
+    <div className="relative rounded-3xl overflow-hidden bg-gradient-to-br from-green-800 to-emerald-900 p-10 min-h-[320px] flex flex-col justify-between">
+      <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(circle at 70% 30%, #4ade80 0%, transparent 60%)' }} />
+      <div className="relative z-10">
+        <p className="text-green-300/80 text-sm font-light mb-6">34 team members across Free State and beyond</p>
+        <div className="flex flex-wrap gap-2">
+          {Array.from({ length: 34 }).map((_, i) => (
+            <div
+              key={i}
+              className={`w-8 h-8 rounded-full border border-green-400/20 flex items-center justify-center ${
+                i < 18 ? 'bg-green-700/60' : i < 26 ? 'bg-teal-700/60' : 'bg-emerald-600/60'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5 text-green-300" />
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="relative z-10 mt-8">
+        <p className="text-white font-semibold text-lg leading-snug">"Our team is our strength — every person plays a part in protecting South Africa's environment."</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div className="section-divider max-w-6xl mx-auto px-6" />
+
       {/* ── LATEST UPDATES ── */}
       <section className="max-w-6xl mx-auto px-6 py-24">
         <div className="flex items-end justify-between mb-12">
